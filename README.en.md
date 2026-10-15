@@ -3,9 +3,9 @@
 <p align="center"><img src="./logo/nzvpn-concept.png" width="156" alt="NZVPN logo" /></p>
 <h1 align="center">NZVPN</h1>
 <p align="center"><strong>A straightforward Android VPN client, powered by Xray and built by NZBOZORG.</strong></p>
-<p align="center"><a href="https://github.com/nzbozorg/nzvpn/releases">Releases</a> · <a href="./docs/build.md">Build guide</a> · <a href="./docs/github-file-format.md">Repository config format</a></p>
+<p align="center"><a href="https://github.com/nzbozorg/nzvpn/releases/download/v1.0.8/NZVPN-1.0.8-universal-release.apk"><kbd>⬇️ Download APK 1.0.8</kbd></a> · <a href="https://github.com/nzbozorg/nzvpn/releases/latest">Latest release</a> · <a href="./docs/build.md">Build guide</a> · <a href="./docs/github-file-format.md">Repository config format</a></p>
 
-> **Getting started:** NZVPN is a **client**, not a server provider. Import your own subscription or configuration. To populate the in-app repository list, add a `configs.txt` file to the repository. The Releases download link will become useful once the first official release is published.
+> **Official release available:** [NZVPN 1.0.8](https://github.com/nzbozorg/nzvpn/releases/tag/v1.0.8) is ready to download; get the APK from its **Assets**. NZVPN is a **client**, not a server provider: it reads the repository's [configuration file](./configs.txt), and you can also import your own subscription or configuration.
 
 ## Highlights
 
@@ -31,16 +31,16 @@
 
 ## Quick start
 
-1. Once the first release is published, download the signed APK from [Releases](https://github.com/nzbozorg/nzvpn/releases). A debug APK is not an update for a signed release build.
+1. Download the signed [`NZVPN-1.0.8-universal-release.apk`](https://github.com/nzbozorg/nzvpn/releases/download/v1.0.8/NZVPN-1.0.8-universal-release.apk) from the official release. A debug APK cannot update a signed release build.
 2. Install it on Android 8.0 or newer and accept Android's VPN permission prompt when connecting.
-3. On first launch, the app tries to read repository configurations. If `configs.txt` has not been added yet, use the **+** button to import your own subscription, server link, or file.
+3. On first launch, the app reads the repository's [configuration file](./configs.txt). You can also use the **+** button to import your own subscription, server link, or file.
 4. Choose a server, or tap the smart-connect option to connect to the **first server that actually responds**.
 
 > You are responsible for using your servers in accordance with the rules that apply where you live. This repository does not bundle VPN servers or accounts with the app.
 
 ## Add repository configurations
 
-The app reads `https://github.com/nzbozorg/nzvpn` by default. The simplest setup is a `configs.txt` at the root of the `main` branch, for example:
+By default, the app reads [`configs.txt`](./configs.txt) from `https://github.com/nzbozorg/nzvpn`. To maintain or change the public list, edit that file at the root of the `main` branch; each line can follow this example:
 
 ```text
 # One subscription URL per line
@@ -63,11 +63,11 @@ bash tools/fetch-core.sh
 
 To produce the dual-ABI release APK, use `bash tools/build-release.sh` with your signing environment configured as explained in the [build guide](./docs/build.md). **Keep the original signing key if you want to update previous installs**, and never commit keys, passwords, or tokens.
 
-## Enable GitHub-based updates
+## GitHub-based updates
 
-Putting an APK in the repository is not sufficient. Create a **stable GitHub Release** tagged `v1.0.8` in the public repository, and attach the signed `NZVPN-1.0.8-universal-release.apk` under that exact name. For future versions, keep the `NZVPN-X.Y.Z-universal-release.apk` naming pattern, use a higher version code, and sign with **the same key**.
+The stable [`v1.0.8` release](https://github.com/nzbozorg/nzvpn/releases/tag/v1.0.8) is available with the signed `NZVPN-1.0.8-universal-release.apk`. The app checks this repository's latest stable release under **Settings → App updates**; if you have already installed 1.0.8, a “no newer version” message is expected.
 
-The app checks the latest stable release under **Settings → App updates**. Until a release exists, there is no update to download. See the [build and publishing guide](./docs/build.md) for the full workflow.
+For future releases, keep the `NZVPN-X.Y.Z-universal-release.apk` naming pattern, increase both the version and `versionCode`, and sign with **the same key**. Simply adding an APK to the repository's ordinary files does not enable in-app updates. Details: [build and publishing guide](./docs/build.md).
 
 ## Privacy and security
 
@@ -80,8 +80,12 @@ The app checks the latest stable release under **Settings → App updates**. Unt
 
 Issues and pull requests are welcome. **Do not post private subscription links, passwords, signing keys, tokens, or sensitive logs in public issues.** Developer guides live in `docs/`, and the project's Android skills remain in `skills/`.
 
-The app logo belongs to **NZBOZORG**. [AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite) provides the connection core. Flag assets are from [Twemoji](https://github.com/twitter/twemoji) (CC BY 4.0), and the fonts use OFL; see [`app/src/main/assets/licenses/`](./app/src/main/assets/licenses/) for their notices.
+[AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite) provides the connection core. The skills in `skills/` come from [Android Skills](https://github.com/android/skills); their authors retain their respective copyrights.
 
-**There is no root-level `LICENSE` for this project's code yet.** Before describing its reuse or contribution terms as open source, choose a license and add a `LICENSE` file. Third-party assets and dependencies retain their respective terms.
+## License and brand
+
+**NZVPN's original code** is released under the [Apache License 2.0](./LICENSE); the full terms are in `LICENSE`. This license does **not** grant independent use of the **NZVPN/NZBOZORG name, logo, or brand identity**. These belong to NZBOZORG and require separate permission for reuse.
+
+Flag assets come from [Twemoji](https://github.com/twitter/twemoji) under CC BY 4.0, and the fonts use OFL; see [`app/src/main/assets/licenses/`](./app/src/main/assets/licenses/) for their notices. Third-party assets, skills, and dependencies retain their own licenses and copyrights.
 
 <p align="center">Made with ❤️ by <strong>Amir NoZohour</strong> · NZBOZORG</p>
