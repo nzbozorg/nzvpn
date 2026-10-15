@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- مسیرهایی که FileProvider برای «فرستادن فایل برنامه» اجازه می‌دهد -->
+<paths>
+    <cache-path name="share" path="share/" />
+    <cache-path name="updates" path="updates/" />
+</paths>

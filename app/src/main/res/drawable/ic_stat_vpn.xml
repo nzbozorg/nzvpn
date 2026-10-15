@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Small notification/status-bar icon: simplified NZ + route-arrow silhouette
+  from the approved logo. Android renders this as one opaque, tinted color;
+  status icons cannot show the copper/cream/cyan artwork. The expanded
+  notification also includes the full-color logo as a large icon.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- N: bold enough for 24dp, open counters remain visible -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M1.15,5 L3.55,5 L8.8,12.45 L8.8,5 L11,5 L11,17.75 L8.65,17.75 L3.5,10.3 L3.5,17.75 L1.15,17.75 Z" />
+    <!-- Z: shared angular vocabulary, finishing as the forward arrow -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12.2,5 L20.75,5 L20.75,6.9 L15.35,15.35 L18.15,15.35 L18.15,13.9 L22.85,17.65 L18.15,21.2 L18.15,19.3 L12.2,19.3 L12.2,17.05 L17.65,7.25 L12.2,7.25 Z" />
+</vector>

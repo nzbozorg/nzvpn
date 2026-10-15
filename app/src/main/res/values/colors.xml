@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- رنگ‌ها فقط برای لایه‌های XML (پس‌زمینهٔ پنجره، آیکون). مرجع اصلی: ui/theme/Color.kt -->
+    <color name="nz_background">#FF090A0C</color>
+    <!-- رنگ دقیق زمینهٔ اتود تأییدشدهٔ لوگوی NZVPN -->
+    <color name="nz_icon_background">#FF181D21</color>
+    <color name="nz_surface">#FF111317</color>
+    <color name="nz_copper">#FFC27D4D</color>
+    <color name="nz_cyan">#FF5DD6F4</color>
+</resources>

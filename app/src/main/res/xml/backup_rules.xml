@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- توکن گیت‌هاب و لیست سرورها پشتیبان‌گیری نمی‌شوند (دادهٔ حساس) -->
+    <exclude domain="sharedpref" path="nzvpn.xml" />
+    <exclude domain="file" path="servers.json" />
+    <exclude domain="file" path="custom_servers/" />
+</full-backup-content>

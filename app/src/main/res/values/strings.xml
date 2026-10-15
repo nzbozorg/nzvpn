@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NZVPN</string>
+    <string name="brand_owner">NZBOZORG</string>
+
+    <!-- اعلان اتصال -->
+    <string name="notif_channel_name">وضعیت اتصال</string>
+    <string name="notif_channel_desc">نمایش وضعیت تونل NZVPN</string>
+    <string name="notif_title_connecting">NZVPN — در حال اتصال…</string>
+    <string name="notif_title_connected">NZVPN — متصل</string>
+    <string name="notif_stop">قطع</string>
+
+    <!-- دسترس‌پذیری -->
+    <string name="cd_logo">نشان NZVPN</string>
+</resources>

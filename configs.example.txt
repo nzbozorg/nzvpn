@@ -1,0 +1,45 @@
+# ==========================================================================
+#  NZVPN — فایل کانفیگ‌ها  (مخزن: github.com/nzbozorg/nzvpn)
+# ==========================================================================
+#
+#  این فایل را در ریشهٔ مخزن nzbozorg/nzvpn بگذارید.
+#  بعد از افزودن این فایل به مخزن، در NZVPN دکمهٔ
+#  «به‌روزرسانی از مخزن» را بزنید (تنظیمات جداگانه‌ای وجود ندارد).
+#
+#      https://raw.githubusercontent.com/nzbozorg/nzvpn/main/configs.txt
+#
+#  قواعد نوشتن (کامل: docs/github-file-format.md)
+#    • خط خالی یا شروع‌شده با # یا //  → نادیده گرفته می‌شود
+#    • sub: <آدرس>   → یک ساب v2ray (خود برنامه دانلود و باز می‌کند)
+#    • https://...   → همان «sub» (خیلی از پنل‌ها لینک خام می‌دهند)
+#    • بقیهٔ خطوط   → لینک سرور: vmess / vless / trojan / ss / socks
+#
+#  نکته: هر خط را می‌توانید با #نام دلخواه# در انتها برچسب بزنید؟
+#        نه — نام سرور از انتهای خود لینک (#fragment) خوانده می‌شود.
+# ==========================================================================
+
+
+# --------------------------------------------------------------------------
+#  ۱) سرورهای مستقیم (لینک را عیناً از پنل خودتان کپی کنید)
+# --------------------------------------------------------------------------
+# vless://UUID@SERVER:443?encryption=none&security=reality&sni=www.microsoft.com&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID&spx=%2F&type=tcp&flow=xtls-rprx-vision#سرور-۱-ریلیتی
+# trojan://PASSWORD@SERVER:8443?security=tls&sni=SERVER&type=ws&path=%2Fws&host=SERVER#سرور-۲-تروجان
+# vmess://BASE64_JSON
+# ss://BASE64(method:password)@SERVER:8388#سرور-۴-شادوساکس
+
+
+# --------------------------------------------------------------------------
+#  ۲) ساب‌های پنل (پیشنهادشده: تحویل کانفیگ‌ها با ساب، چون پنل خودش به‌روز می‌کند)
+# --------------------------------------------------------------------------
+# sub: https://raw.githubusercontent.com/nzbozorg/nzvpn/main/sub1.txt
+# sub: https://your-panel.example.com/sub/XXXXXXXX
+# https://your-panel.example.com/sub/YYYYYYYY
+
+
+# --------------------------------------------------------------------------
+#  ۳) نمونهٔ کارکردی (این‌ها را حذف کنید و لینک‌های خودتان را بگذارید)
+#     این‌ها فقط نمونه‌اند و به هیچ سروری وصل نمی‌شوند.
+# --------------------------------------------------------------------------
+vless://b0c8a5d2-a5a2-47b6-8c12-4af1cfb0f310@node1.nzbozorg.ir:443?encryption=none&security=reality&sni=www.microsoft.com&fp=chrome&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sid=6ba85179e30d4fc2&spx=%2F&type=tcp&flow=xtls-rprx-vision#نمونه-ریلیتی
+trojan://Tr0janP4ss@node2.nzbozorg.ir:8443?security=tls&sni=node2.nzbozorg.ir&type=ws&path=%2Fnz&host=node2.nzbozorg.ir#نمونه-تروجان
+ss://YWVzLTI1Ni1nY206cGFzc3dvcmQxMjM=@node3.nzbozorg.ir:8388#نمونه-شادوساکس
