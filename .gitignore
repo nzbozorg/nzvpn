@@ -20,3 +20,9 @@ telegram.config
 keystore.properties
 
 keystore/
+
+# وابستگی باینری و خروجی‌های بازتولیدپذیر را در مخزن عمومی ثبت نکنید.
+/app/libs/*.aar
+/apk/
+/releases/
+/.kotlin/

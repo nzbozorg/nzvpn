@@ -1,11 +1,14 @@
 package nzvpn.nzbozorg.ir.net
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import nzvpn.nzbozorg.ir.brand.BrandConfig
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -15,6 +18,7 @@ import java.io.IOException
 import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /** فقط انتشار رسمی همین مخزن، با فایل APK مشترک و نام دقیق پذیرفته می‌شود. */
 data class GithubRelease(
@@ -84,6 +88,19 @@ object ReleaseCatalog {
     }
 }
 
+/** ادامهٔ دانلود فقط با پاسخ Range معتبر؛ پاسخ ۲۰۰ یعنی دانلود کامل از ابتدا. */
+object UpdateRange {
+    private val pattern = Regex("^bytes (\\d+)-(\\d+)/(\\d+)$")
+
+    fun valid(contentRange: String?, start: Long, total: Long): Boolean {
+        val parts = pattern.matchEntire(contentRange.orEmpty())?.groupValues ?: return false
+        val first = parts[1].toLongOrNull() ?: return false
+        val last = parts[2].toLongOrNull() ?: return false
+        val length = parts[3].toLongOrNull() ?: return false
+        return first == start && length == total && last in first until total
+    }
+}
+
 /** بررسی نسخهٔ پایدار و دریافت APK از GitHub Releases با محدودیت حجم و تطبیق هش. */
 class GithubUpdateClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -94,16 +111,25 @@ class GithubUpdateClient(
         .followRedirects(false)
         .build(),
 ) {
-    private fun releaseFile(url: String): Response {
+    private val activeDownloadCall = AtomicReference<Call?>()
+
+    /** دکمهٔ توقف باید درخواست شبکهٔ بلاک‌شده را هم فوراً آزاد کند. */
+    fun interruptDownload() { activeDownloadCall.get()?.cancel() }
+
+    private fun releaseFile(url: String, offset: Long, onCall: (Call) -> Unit): Response {
         var current = URI(url)
         repeat(5) {
             val host = current.host.orEmpty().lowercase()
             if (current.scheme != "https" || current.port != -1 ||
                 (host != "github.com" && !host.endsWith(".githubusercontent.com"))
             ) throw IOException("لینک دانلود از گیت‌هاب خارج شد")
-            val request = Request.Builder().url(current.toString())
-                .header("User-Agent", "NZVPN/${BrandConfig.VERSION_NAME}").build()
-            val response = client.newCall(request).execute()
+            val builder = Request.Builder().url(current.toString())
+                .header("User-Agent", "NZVPN/${BrandConfig.VERSION_NAME}")
+            if (offset > 0L) builder.header("Range", "bytes=$offset-")
+            val call = client.newCall(builder.build())
+            onCall(call)
+            activeDownloadCall.set(call)
+            val response = call.execute()
             if (response.code !in 300..399) return response
             val location = response.header("Location")
             response.close()
@@ -133,6 +159,23 @@ class GithubUpdateClient(
         }
     }
 
+    fun partialFile(context: Context, release: GithubRelease): File =
+        File(File(context.cacheDir, "updates"), "${release.fileName}.part")
+
+    fun downloadedFile(context: Context, release: GithubRelease): File =
+        File(File(context.cacheDir, "updates"), release.fileName)
+
+    fun partialPercent(context: Context, release: GithubRelease): Int =
+        ((partialFile(context, release).length().coerceIn(0L, release.sizeBytes) * 100) /
+            release.sizeBytes).toInt()
+
+    fun discard(context: Context, release: GithubRelease) {
+        interruptDownload()
+        partialFile(context, release).delete()
+        downloadedFile(context, release).delete()
+    }
+
+    /** توقف، قطعهٔ دریافت‌شده را حفظ می‌کند؛ ادامه با Range و هش‌سنجی کل فایل. */
     suspend fun download(
         context: Context, release: GithubRelease,
         onProgress: (Int) -> Unit = {},
@@ -144,33 +187,58 @@ class GithubUpdateClient(
         val folder = File(context.cacheDir, "updates").apply { mkdirs() }
         val target = File(folder, release.fileName)
         val part = File(folder, "${release.fileName}.part")
-        part.delete()
         target.delete()
+        if (part.length() >= release.sizeBytes) part.delete()
+        var offset = part.length()
+        var active: Call? = null
+        var discardOnFailure = false
         try {
-            releaseFile(release.downloadUrl).use { response ->
-                if (!response.isSuccessful) throw IOException("دریافت فایل ناموفق بود (${response.code})")
+            releaseFile(release.downloadUrl, offset) { active = it }.use { response ->
+                currentCoroutineContext().ensureActive()
                 val finalUrl = response.request.url
                 val allowedHost = finalUrl.host == "github.com" ||
                     finalUrl.host.endsWith(".githubusercontent.com")
                 if (finalUrl.scheme != "https" || !allowedHost) {
+                    discardOnFailure = true
                     throw IOException("دانلود به نشانی ناشناخته هدایت شد")
                 }
+                val append = when {
+                    offset > 0L && response.code == 206 &&
+                        UpdateRange.valid(response.header("Content-Range"), offset, release.sizeBytes) -> true
+                    response.code == 200 -> false // سرور Range را نپذیرفت؛ از صفر شروع کن.
+                    else -> {
+                        discardOnFailure = true
+                        throw IOException("پاسخ ادامهٔ دانلود معتبر نیست (${response.code})")
+                    }
+                }
+                if (!append) { part.delete(); offset = 0L }
                 val body = response.body
-                if (body.contentLength() > ReleaseCatalog.MAX_APK_BYTES) {
+                if (body.contentLength() > release.sizeBytes - offset) {
+                    discardOnFailure = true
                     throw IOException("حجم بستهٔ دانلودی بیش از حد مجاز است")
                 }
                 val hash = MessageDigest.getInstance("SHA-256")
-                var copied = 0L
+                if (append) part.inputStream().buffered().use { input ->
+                    val bytes = ByteArray(32 * 1024)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val n = input.read(bytes)
+                        if (n < 0) break
+                        hash.update(bytes, 0, n)
+                    }
+                }
+                var copied = offset
                 var lastPercent = -1
                 body.byteStream().use { input ->
-                    part.outputStream().buffered().use { output ->
+                    java.io.FileOutputStream(part, append).buffered().use { output ->
                         val chunk = ByteArray(32 * 1024)
                         while (true) {
                             currentCoroutineContext().ensureActive()
                             val count = input.read(chunk)
                             if (count == -1) break
                             copied += count
-                            if (copied > ReleaseCatalog.MAX_APK_BYTES) {
+                            if (copied > release.sizeBytes) {
+                                discardOnFailure = true
                                 throw IOException("حجم بستهٔ دانلودی بیش از حد مجاز است")
                             }
                             output.write(chunk, 0, count)
@@ -183,18 +251,29 @@ class GithubUpdateClient(
                         }
                     }
                 }
-                if (copied != release.sizeBytes) throw IOException("حجم فایل دانلودشده با گیت‌هاب یکی نیست")
+                currentCoroutineContext().ensureActive()
+                if (copied != release.sizeBytes) {
+                    // قطعهٔ نیمه‌کاره برای ادامهٔ بعدی باقی می‌ماند.
+                    throw IOException("دانلود کامل نشد؛ می‌تونی ادامه‌اش بدی")
+                }
                 val actualHash = hash.digest().joinToString("") { "%02x".format(it) }
                 if (release.sha256 != null && actualHash != release.sha256) {
+                    discardOnFailure = true
                     throw IOException("اثر انگشت فایل دانلودشده با گیت‌هاب یکی نیست")
                 }
             }
+            currentCoroutineContext().ensureActive()
             if (!part.renameTo(target)) throw IOException("فایل به‌روزرسانی ذخیره نشد")
             target
         } catch (t: Throwable) {
-            part.delete()
             target.delete()
+            if (discardOnFailure) part.delete()
+            if (!currentCoroutineContext().isActive && t !is CancellationException) {
+                throw CancellationException("دریافت متوقف شد").apply { initCause(t) }
+            }
             throw t
+        } finally {
+            active?.let { activeDownloadCall.compareAndSet(it, null) }
         }
     }
 }

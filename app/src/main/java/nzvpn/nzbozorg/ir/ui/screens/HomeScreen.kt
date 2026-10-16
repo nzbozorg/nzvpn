@@ -27,6 +27,13 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import nzvpn.nzbozorg.ir.R
 import nzvpn.nzbozorg.ir.brand.BrandConfig
 import nzvpn.nzbozorg.ir.data.GroupSource
+import nzvpn.nzbozorg.ir.data.SavedProfiles
 import nzvpn.nzbozorg.ir.model.Profile
 import nzvpn.nzbozorg.ir.service.VpnState
 import nzvpn.nzbozorg.ir.service.VpnStatus
@@ -87,9 +96,11 @@ fun HomeScreen(
     state: NzUiState,
     vpn: VpnStatus,
     isWide: Boolean,
+    updateAvailable: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onSmartConnect: () -> Unit,
+    onSmartConnectGroup: (String) -> Unit,
     onAdd: () -> Unit,
     onDonate: () -> Unit,
     onShare: () -> Unit,
@@ -99,11 +110,16 @@ fun HomeScreen(
     onTestGroup: (String) -> Unit,
     onSelect: (Profile) -> Unit,
     onDeleteServer: (Profile) -> Unit,
+    onToggleSaved: (Profile) -> Unit,
     onDeleteGroup: (String) -> Unit,
     onToggleGroup: (String) -> Unit,
+    onMoveGroup: (String, Int) -> Unit,
 ) {
     val colors = NzTheme.colors
     val dimens = NzTheme.dimens
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val edge = with(LocalDensity.current) { 80.dp.toPx() }
 
     NzBackground {
         Column(
@@ -117,9 +133,11 @@ fun HomeScreen(
                 onDonate = onDonate,
                 onShare = onShare,
                 onSettings = onSettings,
+                updateAvailable = updateAvailable,
             )
 
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     start = dimens.screenPadding,
@@ -183,7 +201,23 @@ fun HomeScreen(
                             onToggle = { onToggleGroup(group.name) },
                             onRefresh = { onRefreshGroup(group.name) },
                             onTest = { onTestGroup(group.name) },
+                            onSmartConnect = { onSmartConnectGroup(group.name) },
                             onDelete = { onDeleteGroup(group.name) },
+                            onMove = { steps -> onMoveGroup(group.name, steps) },
+                            onDragPosition = { localY ->
+                                val row = listState.layoutInfo.visibleItemsInfo.firstOrNull {
+                                    it.key == "group-${group.name}"
+                                }
+                                if (row != null) {
+                                    val y = row.offset + localY
+                                    val info = listState.layoutInfo
+                                    if (y < info.viewportStartOffset + edge) {
+                                        scope.launch { listState.scrollBy(-24f) }
+                                    } else if (y > info.viewportEndOffset - edge) {
+                                        scope.launch { listState.scrollBy(24f) }
+                                    }
+                                }
+                            },
                         )
                     }
                     if (!group.collapsed) {
@@ -191,7 +225,9 @@ fun HomeScreen(
                             ServerRow(
                                 profile = profile,
                                 selected = profile.id == state.selectedId,
+                                saved = SavedProfiles.isStarred(state.servers, profile),
                                 onClick = { onSelect(profile) },
+                                onSaved = { onToggleSaved(profile) },
                                 onDelete = { onDeleteServer(profile) },
                             )
                         }
@@ -213,6 +249,7 @@ private fun TopBar(
     onDonate: () -> Unit,
     onShare: () -> Unit,
     onSettings: () -> Unit,
+    updateAvailable: Boolean,
 ) {
     val colors = NzTheme.colors
     val width = LocalConfiguration.current.screenWidthDp
@@ -272,11 +309,19 @@ private fun TopBar(
             onClick = onShare,
         )
         Spacer(Modifier.width(2.dp))
-        NzIconButton(
-            kind = NzIconKind.SETTINGS,
-            contentDescription = "تنظیمات و به‌روزرسانی برنامه",
-            onClick = onSettings,
-        )
+        Box(Modifier.size(48.dp)) {
+            NzIconButton(
+                kind = NzIconKind.SETTINGS,
+                contentDescription = if (updateAvailable) "تنظیمات؛ نسخهٔ جدید در دسترسه"
+                    else "تنظیمات و به‌روزرسانی برنامه",
+                onClick = onSettings,
+            )
+            if (updateAvailable) Box(
+                Modifier.align(Alignment.TopStart) // راستِ فیزیکی در چیدمان RTL
+                    .padding(top = 5.dp, start = 5.dp).size(9.dp)
+                    .clip(CircleShape).background(colors.redSoft),
+            )
+        }
         Spacer(Modifier.width(2.dp))
         NzIconButton(
             kind = NzIconKind.COFFEE,
@@ -320,20 +365,23 @@ private fun ConnectionPanel(
         Spacer(Modifier.height(14.dp))
 
         val shownProfile = if (connected) {
-            state.servers.firstOrNull { it.displayName == vpn.profileName } ?: selected
+            state.servers.firstOrNull { it.id == vpn.profileId }
         } else selected
+        val groupLabel = if (connected) vpn.groupName else selected?.originGroup
+            ?.ifBlank { selected.groupName }.orEmpty()
+        val serverLabel = when {
+            vpn.server.isNotBlank() && connected -> vpn.server
+            connected && vpn.profileName.isNotBlank() -> vpn.profileName
+            shownProfile != null -> shownProfile.displayName
+            else -> "سروری انتخاب نشده"
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (shownProfile?.flagCountryCode != null) {
                 NzCountryFlag(shownProfile.flagCountryCode)
                 Spacer(Modifier.width(8.dp))
             }
             Text(
-                text = when {
-                    vpn.server.isNotBlank() && connected -> vpn.server
-                    connected && vpn.profileName.isNotBlank() -> vpn.profileName
-                    shownProfile != null -> shownProfile.displayName
-                    else -> "سروری انتخاب نشده"
-                },
+                text = if (groupLabel.isNotBlank()) "$groupLabel / $serverLabel" else serverLabel,
                 style = MaterialTheme.typography.titleMedium,
                 color = if (connected) colors.copperHighlight else colors.textPrimary,
                 maxLines = 2,
@@ -342,7 +390,7 @@ private fun ConnectionPanel(
             )
         }
 
-        val endpoint = if (vpn.server.isNotBlank() && connected) "" else selected?.endpoint.orEmpty()
+        val endpoint = if (connected) shownProfile?.endpoint.orEmpty() else selected?.endpoint.orEmpty()
         if (endpoint.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -358,7 +406,7 @@ private fun ConnectionPanel(
             }
         }
 
-        val latency = if (vpn.latencyMs > 0) vpn.latencyMs else selected?.latencyMs ?: -1
+        val latency = if (vpn.latencyMs > 0) vpn.latencyMs else shownProfile?.latencyMs ?: -1
         if (shownProfile != null || connected) {
             Spacer(Modifier.height(10.dp))
             Row(
@@ -459,27 +507,54 @@ private fun GroupHeader(
     onToggle: () -> Unit,
     onRefresh: () -> Unit,
     onTest: () -> Unit,
+    onSmartConnect: () -> Unit,
     onDelete: () -> Unit,
+    onMove: (Int) -> Unit,
+    onDragPosition: (Float) -> Unit,
 ) {
     val colors = NzTheme.colors
+    val threshold = with(LocalDensity.current) { 72.dp.toPx() }
+    var dragging by remember(group.name) { mutableStateOf(false) }
+    var dragged by remember(group.name) { mutableFloatStateOf(0f) }
     NzCard(
-        selected = !group.collapsed,
+        selected = !group.collapsed || dragging,
         onClick = onToggle,
         contentPadding = 14.dp,
     ) {
-        // نام پوشه یک ردیف کامل دارد تا افزودن دکمهٔ رفرش باعث بریدن نام نشود.
+        // لمس کوتاه = باز/بستن؛ نگه‌داشتن و کشیدن این ردیف = جابه‌جایی پوشه.
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().pointerInput(group.name, threshold) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { dragging = true; dragged = 0f },
+                    onDragEnd = { dragging = false; dragged = 0f },
+                    onDragCancel = { dragging = false; dragged = 0f },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        dragged += dragAmount.y
+                        while (dragged >= threshold) {
+                            onMove(1)
+                            dragged -= threshold
+                        }
+                        while (dragged <= -threshold) {
+                            onMove(-1)
+                            dragged += threshold
+                        }
+                        onDragPosition(change.position.y)
+                    },
+                )
+            },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (group.source?.kind == GroupSource.Kind.REPO) {
-                Image(
+            when {
+                group.name == BrandConfig.GROUP_SAVED -> NzIcon(
+                    NzIconKind.STAR, size = 21.dp, tint = colors.copperBright,
+                )
+                group.source?.kind == GroupSource.Kind.REPO -> Image(
                     painter = painterResource(R.drawable.nz_logo_mark),
                     contentDescription = null,
                     modifier = Modifier.size(22.dp),
                 )
-            } else {
-                NzIcon(
+                else -> NzIcon(
                     kind = NzIconKind.FOLDER,
                     size = 18.dp,
                     tint = if (group.collapsed) colors.copper else colors.copperHighlight,
@@ -501,7 +576,7 @@ private fun GroupHeader(
                 Text(
                     text = when {
                         refreshing -> "در حال به‌روزرسانی همین پوشه…"
-                        testing -> "تست تک‌به‌تک… ${PersianText.digits(testedDone)} از ${PersianText.digits(testedTotal)}"
+                        testing -> "در حال پینگ… ${PersianText.digits(testedDone)} از ${PersianText.digits(testedTotal)}"
                         else -> buildString {
                             append(PersianText.digits(group.profiles.size))
                             append(" سرور")
@@ -523,6 +598,13 @@ private fun GroupHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            NzIcon(
+                kind = NzIconKind.DRAG_HANDLE,
+                size = 17.dp,
+                tint = if (dragging) colors.copperBright else colors.textMuted,
+                contentDescription = "برای جابه‌جایی پوشه نگه دار و بکش",
+            )
+            Spacer(Modifier.width(4.dp))
             NzIcon(
                 kind = NzIconKind.CHEVRON_RIGHT,
                 size = 16.dp,
@@ -551,19 +633,28 @@ private fun GroupHeader(
                 )
             }
             NzIconButton(
-                kind = NzIconKind.BOLT,
-                contentDescription = if (testing) "لغو تست پوشهٔ ${group.name}"
-                    else "تست تک‌به‌تک سرورهای پوشهٔ ${group.name}",
+                kind = NzIconKind.GLOBE,
+                contentDescription = if (testing) "لغو پینگ پوشهٔ ${group.name}"
+                    else "گرفتن پینگ سرورهای پوشهٔ ${group.name}",
                 onClick = onTest,
                 tint = colors.copper,
                 active = testing,
                 enabled = (canTest || testing) && !refreshing,
             )
             NzIconButton(
-                kind = NzIconKind.TRASH,
-                contentDescription = "حذف پوشهٔ ${group.name}",
-                onClick = onDelete,
+                kind = NzIconKind.BOLT,
+                contentDescription = "اتصال به اولین سرور پاسخ‌گوی پوشهٔ ${group.name}",
+                onClick = onSmartConnect,
+                tint = colors.copperBright,
+                enabled = canTest && !refreshing && !testing,
             )
+            if (group.name != BrandConfig.GROUP_SAVED && group.source?.kind != GroupSource.Kind.REPO) {
+                NzIconButton(
+                    kind = NzIconKind.TRASH,
+                    contentDescription = "حذف پوشهٔ ${group.name}",
+                    onClick = onDelete,
+                )
+            }
         }
     }
 }
@@ -572,7 +663,9 @@ private fun GroupHeader(
 private fun ServerRow(
     profile: Profile,
     selected: Boolean,
+    saved: Boolean,
     onClick: () -> Unit,
+    onSaved: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val colors = NzTheme.colors
@@ -622,10 +715,20 @@ private fun ServerRow(
                 NzLatencyBadge(profile.latencyMs)
                 Spacer(Modifier.height(6.dp))
                 NzIconButton(
-                    kind = NzIconKind.TRASH,
-                    contentDescription = "حذف ${profile.displayName}",
-                    onClick = onDelete,
+                    kind = NzIconKind.STAR,
+                    contentDescription = if (saved) "برداشتن ${profile.displayName} از ذخیره‌شده‌ها"
+                        else "ذخیره‌کردن ${profile.displayName}",
+                    onClick = onSaved,
+                    active = saved,
+                    tint = if (saved) colors.copperBright else colors.textMuted,
                 )
+                if (!SavedProfiles.isSaved(profile)) {
+                    NzIconButton(
+                        kind = NzIconKind.TRASH,
+                        contentDescription = "حذف ${profile.displayName}",
+                        onClick = onDelete,
+                    )
+                }
             }
         }
     }

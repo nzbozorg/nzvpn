@@ -15,7 +15,7 @@ object RepoServerLabels {
         testingGroup: String = "", testingStartedAt: Long = 0L,
     ): List<Profile> {
         val repoGroups = sources.values.asSequence()
-            .filter { it.kind == GroupSource.Kind.REPO }
+            .filter { it.kind == GroupSource.Kind.REPO && it.location != RepoVisibility.DIRECT_FILE }
             .map { it.group }.toSet()
         val aliases = profiles.asSequence()
             .filter { it.groupName in repoGroups }

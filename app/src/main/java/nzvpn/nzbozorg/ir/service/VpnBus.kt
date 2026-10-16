@@ -7,6 +7,8 @@ enum class VpnState { DISCONNECTED, CONNECTING, CONNECTED, STOPPING }
 data class VpnStatus(
     val state: VpnState = VpnState.DISCONNECTED,
     val profileName: String = "",
+    val profileId: String = "",
+    val groupName: String = "",
     val server: String = "",
     val latencyMs: Long = -1,
     val upBytes: Long = 0,

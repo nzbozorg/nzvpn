@@ -19,13 +19,15 @@ cd "$(dirname "$0")/.."
 : "${nzKeyAlias:?متغیر nzKeyAlias تنظیم نشده}"
 : "${nzKeyPassword:?متغیر nzKeyPassword تنظیم نشده}"
 
+# رمزها در آرگومان خط فرمان/لاگ پردازه ظاهر نشوند؛ Gradle آنها را از محیط می‌خواند.
+export ORG_GRADLE_PROJECT_nzKeystore="$nzKeystore"
+export ORG_GRADLE_PROJECT_nzKeystorePassword="$nzKeystorePassword"
+export ORG_GRADLE_PROJECT_nzKeyAlias="$nzKeyAlias"
+export ORG_GRADLE_PROJECT_nzKeyPassword="$nzKeyPassword"
+
 # یک APK مشترک برای گوشی‌های ۶۴بیتی و ۳۲بیتی (بدون ABIهای شبیه‌ساز).
-./gradlew :app:assembleRelease --console=plain --no-daemon --max-workers=1 \
-  -PnzAbis=arm64-v8a,armeabi-v7a -PnzUniversalApk=true \
-  -PnzKeystore="$nzKeystore" \
-  -PnzKeystorePassword="$nzKeystorePassword" \
-  -PnzKeyAlias="$nzKeyAlias" \
-  -PnzKeyPassword="$nzKeyPassword"
+bash ./gradlew :app:assembleRelease --console=plain --no-daemon --max-workers=1 \
+  -PnzAbis=arm64-v8a,armeabi-v7a -PnzUniversalApk=true
 
 APK="app/build/outputs/apk/release/app-universal-release.apk"
 # split.include به‌تنهایی universal را محدود نمی‌کند؛ محتوا را هم بررسی کن.

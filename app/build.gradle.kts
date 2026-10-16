@@ -20,8 +20,8 @@ android {
         applicationId = "nzvpn.nzbozorg.ir"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.0.8"
+        versionCode = 10
+        versionName = "1.0.9"
 
         // universal APK در غیر این صورت همهٔ ABIهای موجود در AAR را بسته‌بندی
         // می‌کند، حتی اگر splits.include فقط دو ABI را نام ببرد.
@@ -132,6 +132,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.okhttp)
+    implementation(libs.work)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 

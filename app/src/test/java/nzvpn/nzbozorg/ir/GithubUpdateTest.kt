@@ -1,6 +1,7 @@
 package nzvpn.nzbozorg.ir
 
 import nzvpn.nzbozorg.ir.net.ReleaseCatalog
+import nzvpn.nzbozorg.ir.net.UpdateRange
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -43,6 +44,16 @@ class GithubUpdateTest {
         assertTrue(runCatching { ReleaseCatalog.parse(response(tag = "main")) }.isFailure)
         assertTrue(runCatching { ReleaseCatalog.parse(response(size = ReleaseCatalog.MAX_APK_BYTES + 1)) }.isFailure)
         assertTrue(runCatching { ReleaseCatalog.parse(response(digest = "sha256:BAD")) }.isFailure)
+    }
+
+    @Test fun resumableDownloadRequiresExactByteRangeAndTotalLength() {
+        assertTrue(UpdateRange.valid("bytes 200-999/1000", 200L, 1000L))
+        assertFalse(UpdateRange.valid("bytes 0-999/1000", 200L, 1000L))
+        assertFalse(UpdateRange.valid("bytes 200-999/1001", 200L, 1000L))
+        assertFalse(UpdateRange.valid("bytes 200-1000/1000", 200L, 1000L))
+        assertFalse(UpdateRange.valid("bytes 200-199/1000", 200L, 1000L))
+        assertFalse(UpdateRange.valid(null, 200L, 1000L))
+        assertFalse(UpdateRange.valid("bytes x-y/1000", 200L, 1000L))
     }
 
     @Test fun lookalikeHttpRedirectAndWrongRepoCannotSupplyAnUpdate() {

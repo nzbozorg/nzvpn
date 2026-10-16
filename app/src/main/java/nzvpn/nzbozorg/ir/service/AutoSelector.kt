@@ -110,18 +110,17 @@ object AutoSelector {
     }
 
     /**
-     * برای دکمهٔ تست پوشه: به هر سرور حداکثر یک ثانیه فرصتِ نتیجه در رابط می‌دهیم
-     * و بعد سراغ بعدی می‌رویم؛ هر نتیجه بلافاصله منتشر می‌شود.
-     * فراخوانی بومی Xray در حال اجرا را نمی‌توان به زور متوقف کرد. پس از مهلت،
-     * پاسخ دیررس نادیده گرفته می‌شود و semaphore سراسری جلوی انباشت هسته را می‌گیرد.
-     * اگر همهٔ جایگاه‌ها مشغول باشند، همان بودجهٔ یک‌ثانیه‌ای شامل انتظار نوبت است.
+     * تست پوشه با مهلت واقع‌بینانه برای پاسخ Xray (نه یک ثانیهٔ غیرقابل‌رسیدن).
+     * حداکثر چهار سرور هم‌زمان؛ نتیجهٔ هر سرور به‌محض رسیدن منتشر می‌شود.
+     * مهلت هر سرور فقط پس از گرفتن جایگاه هسته شروع می‌شود. تماس JNI پس از
+     * انقضای مهلت فوراً قطع نمی‌شود، ولی نتیجهٔ دیررسش هیچ‌وقت در UI ثبت نمی‌شود.
      */
-    suspend fun testGroupWithinOneSecond(
+    suspend fun testGroupResponsive(
         profiles: List<Profile>,
         options: XrayConfigBuilder.Options,
-        budgetMs: Long = 1_000L,
+        budgetMs: Long = 6_000L,
+        parallelism: Int = 4,
         probe: (Profile, XrayConfigBuilder.Options) -> Pair<Long, String> = { p, o ->
-            // اول مقصد جهانی با پاسخِ سبک ۲۰۴؛ اگر زود خطا داد مقصد ایرانی هم فرصت دارد.
             val json = XrayConfigBuilder.buildJson(p, o)
             var result: Pair<Long, String> = -1L to ""
             for (url in PingTargets.quickGroupAttempts()) {
@@ -135,52 +134,63 @@ object AutoSelector {
         },
         onProgress: (Progress) -> Unit = {},
     ): List<Profile> {
-        require(budgetMs in 1L..1_000L) { "سقف تست هر سرور یک ثانیه است" }
+        require(budgetMs in 20L..15_000L)
         if (profiles.isEmpty()) return emptyList()
-        val workers = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val results = ArrayList<Profile>(profiles.size)
+        val count = parallelism.coerceIn(1, 4).coerceAtMost(profiles.size)
+        val workerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val next = AtomicInteger()
+        val completions = kotlinx.coroutines.channels.Channel<Pair<Int, Profile>>(
+            kotlinx.coroutines.channels.Channel.UNLIMITED,
+        )
         try {
-            for (profile in profiles) {
-                currentCoroutineContext().ensureActive()
-                val started = AtomicBoolean(false)
-                val task = workers.async {
-                    coreSlots.acquire()
-                    try {
-                        // اگر نوبت بعد از پایانِ بودجه رسید، دیگر نمونهٔ جدید نساز.
-                        currentCoroutineContext().ensureActive()
-                        started.set(true)
-                        probe(profile, options)
-                    } finally { coreSlots.release() }
-                }
-                // async در محدودهٔ مستقل است: توقف انتظار، منتظر آزادشدن JNI نمی‌ماند.
-                val measured = withTimeoutOrNull(budgetMs) {
-                    try {
-                        task.await()
-                    } catch (t: Throwable) {
-                        if (t is CancellationException) throw t
-                        AppLog.e("تست سریع ${profile.displayName} ناموفق", t)
-                        -1L to ""
+            repeat(count) {
+                workerScope.launch {
+                    while (true) {
+                        val index = next.getAndIncrement()
+                        if (index >= profiles.size) break
+                        val profile = profiles[index]
+                        val acquired = kotlinx.coroutines.CompletableDeferred<Unit>()
+                        val task = workerScope.async {
+                            coreSlots.acquire()
+                            try {
+                                currentCoroutineContext().ensureActive()
+                                acquired.complete(Unit)
+                                probe(profile, options)
+                            } finally { coreSlots.release() }
+                        }
+                        // صف هسته و خودِ تست دو مهلت جدا دارند؛ سرور در صف به‌اشتباه
+                        // «بدون پاسخ» گزارش نمی‌شود.
+                        val hasSlot = withTimeoutOrNull(3_000L) { acquired.await(); true } == true
+                        val measured = if (hasSlot) withTimeoutOrNull(budgetMs) {
+                            try { task.await() } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (t: Throwable) {
+                                AppLog.e("تست پوشهٔ ${profile.displayName} ناموفق", t)
+                                -1L to ""
+                            }
+                        } else null
+                        if (measured == null) task.cancel()
+                        val result = when {
+                            !hasSlot -> profile.withTestResult(-1L, "هسته مشغول بود؛ دوباره امتحان کن")
+                            measured != null && measured.first > 0 -> profile.withTestResult(measured.first)
+                            measured != null -> profile.withTestResult(-1L, "بدون پاسخ")
+                            else -> profile.withTestResult(-1L, "مهلت تست تمام شد")
+                        }
+                        completions.send(index to result)
                     }
                 }
-                if (measured == null) task.cancel()
-                val result = if (measured != null && measured.first > 0) {
-                    profile.withTestResult(measured.first)
-                } else {
-                    val reason = when {
-                        measured != null -> "بدون پاسخ"
-                        !started.get() -> "هسته درگیر بود؛ تست اجرا نشد"
-                        else -> "مهلت یک‌ثانیه‌ای تمام شد"
-                    }
-                    profile.withTestResult(-1L, reason)
-                }
-                results += result
-                onProgress(Progress(results.size, profiles.size, result))
             }
+            val finished = arrayOfNulls<Profile>(profiles.size)
+            repeat(profiles.size) { done ->
+                val (index, result) = completions.receive()
+                finished[index] = result
+                onProgress(Progress(done + 1, profiles.size, result))
+            }
+            return profiles.mapIndexed { index, profile -> finished[index] ?: profile }
         } finally {
-            // تماس‌های بومیِ دیررس ممکن است هنوز مشغول باشند؛ نتیجه‌شان منتشر نمی‌شود.
-            workers.cancel()
+            workerScope.cancel()
+            completions.close()
         }
-        return results
     }
 
     /**

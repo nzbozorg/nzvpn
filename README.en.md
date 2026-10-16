@@ -3,35 +3,36 @@
 <p align="center"><img src="./logo/nzvpn-concept.png" width="156" alt="NZVPN logo" /></p>
 <h1 align="center">NZVPN</h1>
 <p align="center"><strong>A straightforward Android VPN client, powered by Xray and built by NZBOZORG.</strong></p>
-<p align="center"><a href="https://github.com/nzbozorg/nzvpn/releases/download/v1.0.8/NZVPN-1.0.8-universal-release.apk"><kbd>⬇️ Download APK 1.0.8</kbd></a> · <a href="https://github.com/nzbozorg/nzvpn/releases/latest">Latest release</a> · <a href="./docs/build.md">Build guide</a> · <a href="./docs/github-file-format.md">Repository config format</a></p>
+<p align="center"><a href="https://github.com/nzbozorg/nzvpn/releases/download/v1.0.9/NZVPN-1.0.9-universal-release.apk"><kbd>⬇️ Download APK 1.0.9</kbd></a> · <a href="https://github.com/nzbozorg/nzvpn/releases/latest">Latest release</a> · <a href="./docs/build.md">Build guide</a> · <a href="./docs/github-file-format.md">Repository config format</a></p>
 
-> **Official release available:** [NZVPN 1.0.8](https://github.com/nzbozorg/nzvpn/releases/tag/v1.0.8) is ready to download; get the APK from its **Assets**. NZVPN is a **client**, not a server provider: it reads the repository's [configuration file](./configs.txt), and you can also import your own subscription or configuration.
+> **Latest version:** [NZVPN 1.0.9](https://github.com/nzbozorg/nzvpn/releases/tag/v1.0.9); get the APK from its **Assets**. NZVPN is a **client**, not a server provider: it reads the repository's [configuration file](./configs.txt), and you can also import your own subscription or configuration.
 
 ## Highlights
 
 - **Xray-powered connections:** Imports `VLESS`, `VMess`, `Trojan`, `Shadowsocks`, `SOCKS`, and `HTTP` links as well as full Xray JSON configurations. After a tunnel starts, the app checks connectivity through the tunnel.
 - **Smart connect:** Servers from every folder enter the same race. The **first fresh successful response** wins; cached ping values are not used to pick a winner. Native probes are limited to **six concurrent calls**, with remaining servers queued.
-- **Fast per-folder testing:** Servers are checked in order, with up to **one second for each result to appear in the UI**. Responsive servers are shown and sorted by latency as results arrive. An Xray native call may continue after the one-second deadline; its late result is ignored.
-- **Practical subscription management:** Import from the clipboard, a file, or a URL; each subscription gets its own folder. Refreshing one folder does not erase its previous servers if fetching fails. Original names and flags are preserved; only servers imported from the repository's subscriptions receive generic display names such as `سرور ۱` (“Server 1”).
+- **Per-folder ping tests and smart connect:** Up to **four servers at a time** get a realistic response window, with results shown progressively and responsive servers sorted by latency. Late native Xray results are ignored after their deadline. A separate per-folder smart-connect action picks the first fresh response from that folder.
+- **Practical subscription management:** Import from the clipboard, a file, or a URL; each subscription gets its own folder. Sources refresh on each entry, while a failed fetch preserves existing servers and the selected/active connection. Settings can remove even default repository subscriptions; restoring them requires an explicit repository read. Original names and flags remain intact; only servers in repository subscriptions receive generic display names such as `سرور ۱` (“Server 1”).
 - **Persian, right-to-left interface:** A dark copper theme, turquoise/red status colors, NZ folder icons, unframed local flag assets, and touch targets of at least 48dp.
-- **Focused settings:** App information, optional support, updates, and sharing in one place, with a separate share action on the home screen.
-- **In-app updates:** Checks stable GitHub Releases, downloads the dual-ABI APK, and validates its package name, version, both architectures, and **the same signing certificate as the installed app**. Installation requires user confirmation in Android's installer.
+- **Starred copies and custom folder order:** Star a server to keep an independent copy in Saved, even if its original subscription is removed. Folders start collapsed; long-press and drag to rearrange them, with the order saved.
+- **Focused settings:** App information, subscription management, optional support, updates, and sharing in one place, with a separate share action on the home screen.
+- **In-app updates:** Checks stable GitHub Releases on entry and roughly **every six hours** (subject to Android scheduling), offers a notification and update badges, and supports **pause/resume/cancel** during download. The APK is checked for its package, version, both architectures, and **the same signing certificate as the installed app**. Installation still requires your confirmation.
 - **Free to use, with no ads or account required.** There is an optional app-sharing action and an entirely optional [coffee contribution](https://coffeebede.com/Amir_NoZohour). ☕
 
 | Item | Value |
 |---|---|
-| Current source version | **1.0.8** (`versionCode 9`) |
+| Current source version | **1.0.9** (`versionCode 10`) |
 | Android | 8.0+ (`minSdk 26`; `targetSdk 36`) |
 | Application ID | `nzvpn.nzbozorg.ir` |
 | Release package | **One APK** for `arm64-v8a` and `armeabi-v7a` |
 | Stack | Kotlin · Jetpack Compose · Xray / libv2ray |
 | Configuration and release repository | `github.com/nzbozorg/nzvpn` |
 
-> **Version 1.0.8 validation:** All 24 JVM tests passed, and the APK's signature and architectures were checked. Connection and update installation have not yet been tested on a physical device for this version.
+> **Version 1.0.9 validation:** All 29 JVM tests passed, and the APK's signing certificate and architectures were checked. Connection quality depends on your servers and network conditions.
 
 ## Quick start
 
-1. Download the signed [`NZVPN-1.0.8-universal-release.apk`](https://github.com/nzbozorg/nzvpn/releases/download/v1.0.8/NZVPN-1.0.8-universal-release.apk) from the official release. A debug APK cannot update a signed release build.
+1. Download the signed [`NZVPN-1.0.9-universal-release.apk`](https://github.com/nzbozorg/nzvpn/releases/download/v1.0.9/NZVPN-1.0.9-universal-release.apk) from the official release. A debug APK cannot update a signed release build.
 2. Install it on Android 8.0 or newer and accept Android's VPN permission prompt when connecting.
 3. On first launch, the app reads the repository's [configuration file](./configs.txt). You can also use the **+** button to import your own subscription, server link, or file.
 4. Choose a server, or tap the smart-connect option to connect to the **first server that actually responds**.
@@ -57,15 +58,15 @@ You need **JDK 17**, **Android SDK Platform 36**, and **Build Tools 36.0.0**. Th
 git clone https://github.com/nzbozorg/nzvpn.git
 cd nzvpn
 bash tools/fetch-core.sh
-./gradlew :app:testDebugUnitTest
-./gradlew :app:assembleDebug -PnzAbis=arm64-v8a -PnzUniversalApk=false
+bash ./gradlew :app:testDebugUnitTest
+bash ./gradlew :app:assembleDebug -PnzAbis=arm64-v8a -PnzUniversalApk=false
 ```
 
 To produce the dual-ABI release APK, use `bash tools/build-release.sh` with your signing environment configured as explained in the [build guide](./docs/build.md). **Keep the original signing key if you want to update previous installs**, and never commit keys, passwords, or tokens.
 
 ## GitHub-based updates
 
-The stable [`v1.0.8` release](https://github.com/nzbozorg/nzvpn/releases/tag/v1.0.8) is available with the signed `NZVPN-1.0.8-universal-release.apk`. The app checks this repository's latest stable release under **Settings → App updates**; if you have already installed 1.0.8, a “no newer version” message is expected.
+The stable [`v1.0.9` release](https://github.com/nzbozorg/nzvpn/releases/tag/v1.0.9) comes with a signed dual-ABI APK. The app checks this repository's latest stable release on entry and periodically; visit **Settings → App updates** to install an available update. Tapping an update notification opens that section.
 
 For future releases, keep the `NZVPN-X.Y.Z-universal-release.apk` naming pattern, increase both the version and `versionCode`, and sign with **the same key**. Simply adding an APK to the repository's ordinary files does not enable in-app updates. Details: [build and publishing guide](./docs/build.md).
 

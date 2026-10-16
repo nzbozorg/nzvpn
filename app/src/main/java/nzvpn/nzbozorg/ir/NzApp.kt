@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import nzvpn.nzbozorg.ir.net.UpdateAlerts
 import nzvpn.nzbozorg.ir.service.NzVpnService
 import nzvpn.nzbozorg.ir.util.AppLog
 
@@ -16,6 +17,7 @@ class NzApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        UpdateAlerts.schedule(this)
         AppLog.d("NZVPN راه‌اندازی شد (${Build.MANUFACTURER} ${Build.MODEL} · API ${Build.VERSION.SDK_INT})")
     }
 

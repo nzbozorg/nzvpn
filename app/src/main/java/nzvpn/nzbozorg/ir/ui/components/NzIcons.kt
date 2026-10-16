@@ -30,6 +30,7 @@ import nzvpn.nzbozorg.ir.ui.theme.NzTheme
 enum class NzIconKind {
     POWER, SHIELD, BOLT, REFRESH, PLUS, SETTINGS, CHECK, CLOSE, CHEVRON_RIGHT,
     HEART, LINK_OUT, WARNING, INFO, UPLOAD, DOWNLOAD, COPY, GLOBE, TRASH, DOT, CLOCK,
+    STAR, DRAG_HANDLE, PAUSE, PLAY,
     /** سکه/حمایت مالی */
     COIN, COFFEE,
     /** اشتراک‌گذاری (فرستادن برنامه برای دیگران) */
@@ -325,6 +326,42 @@ fun NzIcon(
                 line(0.28f, 0.28f, 0.32f, 0.86f)
                 line(0.72f, 0.28f, 0.68f, 0.86f)
                 line(0.32f, 0.86f, 0.68f, 0.86f)
+            }
+
+            NzIconKind.STAR -> {
+                val p = Path()
+                for (i in 0 until 10) {
+                    val angle = -Math.PI / 2 + Math.PI * i / 5
+                    val radius = if (i % 2 == 0) s * 0.42f else s * 0.18f
+                    val point = Offset(c.x + kotlin.math.cos(angle).toFloat() * radius,
+                        c.y + kotlin.math.sin(angle).toFloat() * radius)
+                    if (i == 0) p.moveTo(point.x, point.y) else p.lineTo(point.x, point.y)
+                }
+                p.close()
+                drawPath(p, tint, style = stroke)
+            }
+
+            NzIconKind.DRAG_HANDLE -> {
+                line(0.22f, 0.30f, 0.78f, 0.30f)
+                line(0.22f, 0.50f, 0.78f, 0.50f)
+                line(0.22f, 0.70f, 0.78f, 0.70f)
+            }
+
+            NzIconKind.PAUSE -> {
+                drawLine(tint, Offset(s * 0.36f, s * 0.22f), Offset(s * 0.36f, s * 0.78f),
+                    strokeWidth = w * 2f, cap = StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.64f, s * 0.22f), Offset(s * 0.64f, s * 0.78f),
+                    strokeWidth = w * 2f, cap = StrokeCap.Round)
+            }
+
+            NzIconKind.PLAY -> {
+                val p = Path().apply {
+                    moveTo(s * 0.32f, s * 0.20f)
+                    lineTo(s * 0.80f, s * 0.50f)
+                    lineTo(s * 0.32f, s * 0.80f)
+                    close()
+                }
+                drawPath(p, tint, style = stroke)
             }
 
             NzIconKind.DOT -> drawCircle(tint, w * 1.4f, c)

@@ -5,12 +5,10 @@ import android.content.Context
 /**
  * حافظهٔ تنظیمات (SharedPreferences: "nzvpn").
  *
- * از این نسخه به بعد **بخش تنظیمات در برنامه حذف شده**؛ همه‌چیز خودکار و درست
- * تنظیم شده است. فقط چیزهایی که واقعاً باید بمانند اینجا نگه داشته می‌شوند:
- *   • آخرین سرور انتخاب‌شده
- *   • نتیجهٔ تست‌ها
+ * تنظیمات پایدار داخلی؛ موارد زیر مستقل از نمایش شیت تنظیمات ذخیره می‌شوند:
+ *   • آخرین سرور انتخاب‌شده و نتیجهٔ تست‌ها
  *   • کلید رمزنگاری XUDP (تصادفی، یک‌بار)
- *   • پرچم «یک‌بار از مخزن خوانده شد»
+ *   • ترتیب پوشه‌ها، ساب‌های مخزن حذف‌شده و آخرین نسخهٔ اعلان‌شده
  */
 class AppPrefs private constructor(context: Context) {
 
@@ -86,6 +84,28 @@ class AppPrefs private constructor(context: Context) {
         collapsedGroups = groups.joinToString("\u0001")
     }
 
+    /** ترتیبِ انتخاب‌شده با نگه‌داشتن و کشیدن پوشه؛ نام‌های تازه انتهای فهرست می‌آیند. */
+    fun groupOrder(): List<String> =
+        sp.getString(KEY_GROUP_ORDER, "").orEmpty().split('\u0001').filter { it.isNotBlank() }
+
+    fun saveGroupOrder(names: List<String>) {
+        sp.edit().putString(KEY_GROUP_ORDER, names.distinct().joinToString("\u0001")).apply()
+    }
+
+    /** حذف ساب‌های پیش‌فرض تا بازخوانیِ صریحِ «خواندن از مخزن» پابرجا می‌ماند. */
+    fun suppressedRepoLocations(): Set<String> =
+        sp.getString(KEY_SUPPRESSED_REPO, "").orEmpty()
+            .split('\u0001').filter { it.isNotBlank() }.toSet()
+
+    fun saveSuppressedRepoLocations(locations: Set<String>) {
+        sp.edit().putString(KEY_SUPPRESSED_REPO, locations.joinToString("\u0001")).apply()
+    }
+
+    /** فقط یک اعلان برای هر نسخه؛ بعد از نصب، نسخهٔ بعد دوباره اعلان می‌گیرد. */
+    var lastNotifiedVersion: String
+        get() = sp.getString(KEY_NOTIFIED_VERSION, "").orEmpty()
+        set(value) = sp.edit().putString(KEY_NOTIFIED_VERSION, value).apply()
+
     companion object {
         private const val KEY_SELECTED = "selected"
         private const val KEY_LATENCY = "latency"
@@ -93,6 +113,9 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_REPO_LOADED = "repo_loaded_once"
         private const val KEY_SOURCES_MIGRATED = "sources_migrated"
         private const val KEY_COLLAPSED = "collapsed_groups"
+        private const val KEY_GROUP_ORDER = "group_order_v1"
+        private const val KEY_SUPPRESSED_REPO = "suppressed_repo_urls_v1"
+        private const val KEY_NOTIFIED_VERSION = "last_notified_release"
 
         @Volatile
         private var instance: AppPrefs? = null

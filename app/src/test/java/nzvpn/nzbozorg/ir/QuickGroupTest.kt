@@ -17,52 +17,52 @@ class QuickGroupTest {
     private fun profile(id: String) = Profile(id = id, name = "🇮🇷 $id", group = "پوشه",
         protocol = Protocol.VLESS, address = "$id.example.com", port = 443)
 
-    @Test fun eachServerHasItsOwnShortBudgetAndLateNativeAnswersCannotRewriteResults() = runBlocking {
+    @Test fun everyServerGetsEnoughTimeAndLateNativeAnswersCannotRewriteResults() = runBlocking {
         val events = Collections.synchronizedList(mutableListOf<AutoSelector.Progress>())
         val started = System.nanoTime()
-        val result = AutoSelector.testGroupWithinOneSecond(
+        val result = AutoSelector.testGroupResponsive(
             profiles = listOf(profile("slow"), profile("fast"), profile("last")),
-            options = XrayConfigBuilder.Options(), budgetMs = 80L,
+            options = XrayConfigBuilder.Options(), budgetMs = 220L,
             probe = { p, _ ->
                 if (p.id == "slow") {
-                    // شبیه JNI: قطع‌کردن ترد هم پاسخِ دیررس را متوقف نمی‌کند.
-                    val until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(350)
+                    // شبیه JNI: قطع‌کردن ترد، پاسخِ دیررس را متوقف نمی‌کند.
+                    val until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(650)
                     while (System.nanoTime() < until) {
                         try { Thread.sleep(12) } catch (_: InterruptedException) { }
                     }
-                } else Thread.sleep(8)
+                } else Thread.sleep(if (p.id == "fast") 30 else 80)
                 150L to PingTargets.GLOBAL.first()
             },
             onProgress = { events += it },
         )
         val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-        assertTrue("انتظار برای JNI دیررس: $elapsed ms", elapsed < 280)
+        assertTrue("انتظار بی‌دلیل برای JNI دیررس: $elapsed ms", elapsed < 530)
         assertEquals(listOf(1, 2, 3), events.map { it.done })
         assertEquals(listOf(-1L, 150L, 150L), result.map { it.latencyMs })
-        assertEquals("هسته هنوز ممکن است کار کند، ولی نتیجه نباید تغییر کند", -1L,
-            events.first().latest.latencyMs)
-        Thread.sleep(360)
+        assertEquals("پاسخِ سریع باید قبل از انقضای سرور کند نمایش داده شود",
+            "fast", events.first().latest.id)
+        Thread.sleep(680)
         assertEquals(3, events.size)
         assertEquals(-1L, result.first().latencyMs)
     }
 
-    @Test fun budgetCannotBeRaisedOverOneSecondAndNativeCapacityRemainsLimited() = runBlocking {
+    @Test fun budgetHasSensibleUpperBoundAndNativeCapacityRemainsLimited() = runBlocking {
         val invalid = runCatching {
-            AutoSelector.testGroupWithinOneSecond(emptyList(), XrayConfigBuilder.Options(), 1_001L)
+            AutoSelector.testGroupResponsive(emptyList(), XrayConfigBuilder.Options(), 15_001L)
         }
         assertTrue(invalid.isFailure)
         val active = AtomicInteger()
         val peak = AtomicInteger()
         val launches = AtomicInteger()
-        val results = AutoSelector.testGroupWithinOneSecond(
+        val results = AutoSelector.testGroupResponsive(
             profiles = (1..12).map { profile("server-$it") },
-            options = XrayConfigBuilder.Options(), budgetMs = 35L,
+            options = XrayConfigBuilder.Options(), budgetMs = 60L, parallelism = 12,
             probe = { _, _ ->
                 launches.incrementAndGet()
                 val number = active.incrementAndGet()
                 peak.updateAndGet { maxOf(it, number) }
                 try {
-                    val until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(440)
+                    val until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(310)
                     while (System.nanoTime() < until) {
                         try { Thread.sleep(12) } catch (_: InterruptedException) { }
                     }
@@ -71,11 +71,11 @@ class QuickGroupTest {
             },
         )
         assertEquals(12, results.size)
-        assertTrue("بیش از ظرفیت هسته اجرا شد: ${peak.get()}", peak.get() in 1..AutoSelector.MAX_CONCURRENT_PROBES)
+        assertTrue("بیش از ظرفیت هسته اجرا شد: ${peak.get()}",
+            peak.get() in 1..AutoSelector.MAX_CONCURRENT_PROBES)
         assertTrue(results.all { it.latencyMs < 0 })
-        Thread.sleep(470) // تماس‌های بومی شبیه‌سازی‌شده آزاد شوند.
-        assertTrue("آزمون لغوشده بعداً شروع شد: ${launches.get()}",
-            launches.get() <= AutoSelector.MAX_CONCURRENT_PROBES)
+        Thread.sleep(350)
+        assertEquals("هر ۱۲ سرور باید فرصت تست بگیرند", 12, launches.get())
     }
 
     @Test fun raceDoesNotPutOldCacheAheadOfServersInOtherFolders() {

@@ -24,9 +24,9 @@ XRAY_LIB_VERSION=v26.10.10 bash tools/fetch-core.sh
 ## ۲) بیلد
 ```bash
 bash tools/build.sh                       # دیباگ + تقسیم بر معماری
-./gradlew :app:assembleDebug              # همان کار، دستی
-./gradlew :app:compileDebugKotlin         # فقط کامپایل سریع (تست)
-./gradlew clean                           # پاک‌سازی
+bash ./gradlew :app:assembleDebug              # همان کار، دستی
+bash ./gradlew :app:compileDebugKotlin         # فقط کامپایل سریع (تست)
+bash ./gradlew clean                           # پاک‌سازی
 ```
 خروجی‌ها در `app/build/outputs/apk/debug/`.
 
@@ -52,24 +52,18 @@ adb install -r app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
 مقادیر در `keystore/keystore.properties` هستند (این پوشه در `.gitignore` است).
 
 ```bash
-# رمزها را بیرون از پروژه تنظیم کنید؛ keystore قبلی لازم است.
+# کلید قبلی و رمزها را فقط در محیط محلی خود تنظیم کنید، نه در مخزن عمومی.
+export nzKeystore=keystore/nz-release.jks nzKeyAlias=nzvpn
 export nzKeystorePassword='<رمز-شخصی>'
 export nzKeyPassword="$nzKeystorePassword"
-# ساخت APK انتشار با همان کلید
-./gradlew :app:assembleRelease \
-  -PnzAbis=arm64-v8a,armeabi-v7a -PnzUniversalApk=true \
-  -PnzKeystore=keystore/nz-release.jks \
-  -PnzKeystorePassword="$nzKeystorePassword" \
-  -PnzKeyAlias=nzvpn -PnzKeyPassword="$nzKeyPassword"
-
-# یا با اسکریپت انتشار (متغیرهای بالا و telegram.config محلی لازم‌اند)
-bash tools/publish.sh --note "توضیح این نسخه"
+# اسکریپت، رمزها را در آرگومان خط فرمان آشکار نمی‌کند.
+bash tools/build-release.sh
 ```
 
 > ⚠️ **R8 (کوچک‌سازی کد) به‌صورت پیش‌فرض خاموش است** چون روی ماشین‌های کم‌حافظه
 > (کمتر از ~۱٫۵GB رمز آزاد) روند بیلد با کمبود حافظه کشته می‌شود.
 > روی ماشین قوی اجرا کنید:
-> `./gradlew :app:assembleRelease -PnzMinify=true …`
+> `bash ./gradlew :app:assembleRelease -PnzMinify=true …`
 
 ## ۵) فعال‌کردن آپدیت داخل برنامه از گیت‌هاب
 
@@ -77,27 +71,32 @@ bash tools/publish.sh --note "توضیح این نسخه"
 `https://github.com/nzbozorg/nzvpn` را می‌خواند؛ قرار دادن APK در پوشهٔ گیت
 یا ارسال آن به تلگرام به‌تنهایی قابلیت آپدیت را فعال نمی‌کند.
 
-1. مخزن را عمومی کنید و سورس (بدون `keystore/`، `telegram.config`، AAR و APK) را منتشر کنید.
-2. فایل **امضاشده با همان کلید نصب‌شده** را بسازید:
-   `apk/NZVPN-1.0.8-universal-release.apk`.
-3. در GitHub → **Releases** → **Draft a new release** برچسب `v1.0.8` بگذارید؛
-   گزینهٔ draft/prerelease را خاموش بگذارید و APK را با همین **نام دقیق** پیوست کنید.
-4. برای نسخه‌های بعدی هم برچسب `v1.0.9` و فایل
-   `NZVPN-1.0.9-universal-release.apk` (versionCode بالاتر و همان گواهی) بگذارید.
-5. برنامه دکمهٔ «بررسی نسخهٔ جدید» را دارد؛ پس از دریافت و کنترل امضا/نسخه/ABI،
-   نصب‌کنندهٔ خود اندروید با تأیید کاربر اجرا می‌شود. روی اندروید ۸ به بالا ممکن است
-   لازم باشد اجازهٔ «نصب از این منبع» را **اختیاری و با انتخاب کاربر** فعال کنید.
+1. **اول سورس ۱.۰.۹ را روی `main` کامیت و push کنید.** مخزن عمومی در پایان
+   نسخهٔ ۱.۰.۸ را داشت؛ تگ جدید اگر از آن کامیت ساخته شود، آرشیو خودکار GitHub
+   سورس اشتباه خواهد داشت. کلید، توکن، AAR و APK را کامیت نکنید.
+2. APK مشترکِ امضاشده با همان کلید را بسازید/بردارید:
+   `apk/NZVPN-1.0.9-universal-release.apk`، با `versionCode 10`.
+3. در GitHub → **Releases** → **Draft a new release** برچسب جدید `v1.0.9`
+   را **از کامیت سورس ۱.۰.۹** بسازید؛ برای ۱.۰.۸ چیزی جایگزین نکنید.
+4. فایل‌های `NZVPN-1.0.9-universal-release.apk` و
+   `NZVPN-1.0.9-source.zip` را جداگانه به Assets همان Release اضافه کنید؛
+   متن [`release-notes-v1.0.9.md`](./release-notes-v1.0.9.md) را در توضیحات
+   بگذارید. Draft و Pre-release را برای انتشار پایدار خاموش کنید.
+5. آپدیت درون‌برنامه‌ای تنها برای نسخه‌های **جدیدتر از نسخهٔ نصب‌شده** نمایش داده
+   می‌شود؛ فایل APK پیش از بازشدن نصب‌کننده از نظر نام، ABI، نسخه و امضا بررسی
+   می‌شود و نصب نهایی همیشه با انتخاب خود کاربر است.
 
-تا وقتی انتشار رسمی ساخته نشود، API گیت‌هاب 404 می‌دهد و برنامه پیام فارسی
-«هنوز نسخه‌ای در انتشارهای گیت‌هاب نیست» نشان می‌دهد. حالت آفلاین یا انتشار با
-کلید دیگر نیز هرگز به‌طور خودکار نصب نمی‌شود. این روش ویژهٔ توزیع مستقیم از
+نسخهٔ عمومی ۱.۰.۸ از قبل وجود دارد. تا پیش از انتشار ۱.۰.۹، نصب ۱.۰.۹
+طبیعتاً آپدیت جدیدتری از GitHub پیدا نمی‌کند. حالت آفلاین یا انتشار با کلید
+دیگر نیز هرگز به‌طور خودکار نصب نمی‌شود. این روش ویژهٔ توزیع مستقیم از
 گیت‌هاب است؛ برای نسخهٔ پلی‌استور سیاست `REQUEST_INSTALL_PACKAGES` را بازبینی کنید.
 
 ## ۶) انتشار در گوگل‌پلی
 ```bash
-export nzKeystore=nz-release.jks nzKeystorePassword=… nzKeyAlias=nzvpn nzKeyPassword=…
+export nzKeystore=keystore/nz-release.jks nzKeystorePassword=… nzKeyAlias=nzvpn nzKeyPassword=…
 bash tools/build-release.sh               # APK انتشار مستقیم
-./gradlew :app:bundleRelease -PnzKeystore=… -PnzKeystorePassword=… -PnzKeyAlias=… -PnzKeyPassword=…  # AAB پلی
+# برای AAB همان اطلاعات را با متغیرهای ORG_GRADLE_PROJECT_nz... به Gradle بدهید؛
+# کلیدها و رمزها را در آرگومان خط فرمان یا مخزن عمومی قرار ندهید.
 ```
 نکته‌های پلی:
 - سیاست VPN پلی: در فرم Play Console توضیح دهید VPN برای چه کاری است
@@ -112,5 +111,5 @@ bash tools/build-release.sh               # APK انتشار مستقیم
 | کشته‌شدن Gradle روی ماشین کم‌حافظه | `gradle.properties` (تنظیمات سبک از قبل هست) |
 | «هستهٔ Xray پیدا نشد» هنگام build | `bash tools/fetch-core.sh` |
 | بیلد با کمبود حافظه کشته می‌شود (داِمن ناپدید می‌شود) | `-PnzMinify=true` را نزنید؛ فایل‌های موقت `/tmp` را پاک کنید؛ `--max-workers=1` |
-| اپ سرور نشان نمی‌دهد | فایل `configs.txt` در مخزن گیت‌هاب نیست (docs/github-file-format.md) |
+| اپ سرور نشان نمی‌دهد | دسترسی شبکه و محتوای `configs.txt` و ساب‌های داخلش را بررسی کنید (docs/github-file-format.md) |
 | نصب روی گوشی شکست می‌خورد | نسخهٔ انتشار مشترک `arm64-v8a` + `armeabi-v7a` را نصب کنید؛ امضای به‌روزرسانی باید با نسخهٔ قبلی یکی باشد |

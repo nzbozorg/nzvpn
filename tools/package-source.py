@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bundle only NZVPN's actual source and licensed assets (never credentials).
 
-Usage: python3 tools/package-source.py [1.0.8]
+Usage: python3 tools/package-source.py [1.0.9]
 Output: releases/NZVPN-<version>-source.zip
 """
 import re
@@ -10,13 +10,13 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.0.8"
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.0.9"
 if not re.fullmatch(r"\d+\.\d+\.\d+", VERSION):
-    raise SystemExit("Version must look like 1.0.8")
+    raise SystemExit("Version must look like 1.0.9")
 
 OUTPUT = ROOT / "releases" / f"NZVPN-{VERSION}-source.zip"
 ROOT_FILES = (
-    ".gitignore", "README.md", "SOURCE-README.md", "build.gradle.kts",
+    ".gitignore", "README.md", "README.en.md", "SOURCE-README.md", "LICENSE", "build.gradle.kts",
     "settings.gradle.kts", "gradle.properties", "gradlew", "gradlew.bat",
     "configs.example.txt",
 )

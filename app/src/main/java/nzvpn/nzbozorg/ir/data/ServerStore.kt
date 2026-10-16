@@ -19,8 +19,8 @@ import org.json.JSONObject
  * - کانفیگ‌های کامل (JSON) در files/custom_servers/<id>.json نگه داشته می‌شوند.
  * - نتیجهٔ تست تاخیر در SharedPreferences می‌ماند تا لیست بعد از بستن برنامه هم مرتب بماند.
  *
- * قالب فایل servers.json (نسخهٔ ۳): لینک‌ها، کانفیگ‌های کامل و منبع رفرش هر پوشه.
- * نسخه‌های ۱ (آرایهٔ لینک) و ۲ (بدون منبع) نیز بدون حذف داده خوانده می‌شوند.
+ * قالب فایل servers.json (نسخهٔ ۴): لینک‌ها، کانفیگ‌های کامل، منبع رفرش و
+ * شناسه/پوشهٔ اصلی کپی‌های ذخیره‌شده. نسخه‌های ۱ تا ۳ نیز قابل خواندن‌اند.
  */
 object ServerStore {
 
@@ -39,13 +39,21 @@ object ServerStore {
         for (item in snapshot.items) {
             try {
                 val parsed = ShareLinkParser.parseOrThrow(item.link)
-                profiles += parsed.copy(group = item.group.ifBlank { parsed.group })
+                val group = item.group.ifBlank { parsed.group }
+                profiles += parsed.copy(
+                    group = group,
+                    id = if (group == BrandConfig.GROUP_SAVED && item.id.startsWith("saved-"))
+                        item.id else parsed.id,
+                    originGroup = item.originGroup,
+                )
             } catch (t: Throwable) {
                 // لینک ناخوانا را نادیده بگیر
             }
         }
         for (item in snapshot.custom) {
-            readCustom(context, item.id)?.let { profiles += it.copy(group = item.group) }
+            readCustom(context, item.id)?.let { profiles += it.copy(
+                group = item.group, originGroup = item.originGroup,
+            ) }
         }
         return StoredData(
             profiles = profiles.map { profile ->
@@ -64,10 +72,12 @@ object ServerStore {
             when {
                 profile.protocol == Protocol.CUSTOM -> {
                     writeCustom(context, profile)
-                    custom.put(JSONObject().put("id", profile.id).put("group", profile.group))
+                    custom.put(JSONObject().put("id", profile.id).put("group", profile.group)
+                        .put("originGroup", profile.originGroup))
                 }
                 profile.link.isNotBlank() ->
-                    items.put(JSONObject().put("link", profile.link).put("group", profile.group))
+                    items.put(JSONObject().put("id", profile.id).put("link", profile.link)
+                        .put("group", profile.group).put("originGroup", profile.originGroup))
             }
             if (profile.latencyMs > 0) {
                 latency.append(profile.id).append('=').append(profile.latencyMs)
@@ -90,10 +100,14 @@ object ServerStore {
      * نتیجه بر اساس پوشه مرتب می‌شود.
      */
     fun merge(existing: List<Profile>, fresh: List<Profile>): List<Profile> {
-        val seen = existing.map { it.dedupeKey }.toMutableSet()
+        // کپیِ ستاره‌دار باید کنار سرور اصلی باقی بماند؛ در عین حال هر یک فقط
+        // یک‌بار در جای خودش دیده شود.
+        fun key(profile: Profile): String =
+            (if (profile.groupName == BrandConfig.GROUP_SAVED) "saved|" else "") + profile.dedupeKey
+        val seen = existing.map(::key).toMutableSet()
         val merged = existing.toMutableList()
         for (profile in fresh) {
-            if (seen.add(profile.dedupeKey)) merged += profile
+            if (seen.add(key(profile))) merged += profile
         }
         return merged
     }
@@ -121,7 +135,7 @@ object ServerStore {
 
     // ------------------------------------------------------------------ داخلی
 
-    private class Item(val id: String, val link: String, val group: String)
+    private class Item(val id: String, val link: String, val group: String, val originGroup: String = "")
 
     private class Snapshot(
         val items: List<Item>, val custom: List<Item>, val sources: List<GroupSource>,
@@ -155,9 +169,12 @@ object ServerStore {
             val items = (0 until itemsArray.length()).mapNotNull { i ->
                 when (val element = itemsArray.opt(i)) {
                     is JSONObject -> Item(
-                        id = ShareLinkParser.sha1(element.optString("link")),
+                        id = element.optString("id").ifBlank {
+                            ShareLinkParser.sha1(element.optString("link"))
+                        },
                         link = element.optString("link"),
                         group = element.optString("group"),
+                        originGroup = element.optString("originGroup"),
                     )
                     is String -> Item(ShareLinkParser.sha1(element), element, "")
                     else -> null
@@ -165,7 +182,8 @@ object ServerStore {
             }
             val customs = (0 until customArray.length()).mapNotNull { i ->
                 when (val element = customArray.opt(i)) {
-                    is JSONObject -> Item(element.optString("id"), "", element.optString("group"))
+                    is JSONObject -> Item(element.optString("id"), "", element.optString("group"),
+                        element.optString("originGroup"))
                     is String -> Item(element, "", "")
                     else -> null
                 }
@@ -188,7 +206,7 @@ object ServerStore {
     }
 
     private fun writeSnapshot(context: Context, items: JSONArray, custom: JSONArray, sources: JSONArray) {
-        val json = JSONObject().put("v", 3).put("items", items)
+        val json = JSONObject().put("v", 4).put("items", items)
             .put("custom", custom).put("sources", sources)
         val atomic = AtomicFile(snapshotFile(context))
         val stream = atomic.startWrite()

@@ -5,11 +5,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- اتصال VPN + سرویس پیش‌زمینه (اندروید ۱۴+ نیاز به اعلام نوع سرویس دارد) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- نصب اختیاری به‌روزرسانی امضاشده از انتشارهای رسمی گیت‌هاب با تأیید کاربر -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -42,13 +42,14 @@
             </intent-filter>
         </activity>
 
-        <!-- نوع systemExempted مخصوص اپ‌های VPN است (اندروید ۱۴+).
-             اگر Play ایراد گرفت، به specialUse تغییر دهید و دلیلش را توضیح دهید. -->
+        <!-- VPN با مجوز کاربر از مصداق‌های systemExempted است؛ افزودن مجوز
+             ساعت/هشدار دقیق برای ساکت‌کردن lint نادرست و خلاف کمینه‌سازی مجوزهاست. -->
         <service
             android:name=".service.NzVpnService"
             android:exported="false"
             android:foregroundServiceType="systemExempted"
-            android:permission="android.permission.BIND_VPN_SERVICE">
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            tools:ignore="ForegroundServicePermission">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>

@@ -35,6 +35,8 @@ data class Profile(
     val link: String = "",
     /** پوشه/گروه سرور: نام ساب یا «فایل مخزن» یا «افزوده‌شده با دست» */
     val group: String = "",
+    /** پوشهٔ اصلیِ کپی ذخیره‌شده؛ حتی پس از حذف منبع برای اعلان اتصال می‌ماند. */
+    val originGroup: String = "",
     /** برای CUSTOM: کل کانفیگ Xray به‌صورت JSON */
     val rawJson: String? = null,
     /** برای CUSTOM: فایل کانفیگ روی دیسک (مسیر) */

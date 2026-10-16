@@ -55,6 +55,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -62,9 +63,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import nzvpn.nzbozorg.ir.brand.BrandConfig
 import nzvpn.nzbozorg.ir.net.TrustedApk
+import nzvpn.nzbozorg.ir.net.UpdateAlerts
 import nzvpn.nzbozorg.ir.parser.ConfigImporter
 import nzvpn.nzbozorg.ir.service.NzVpnService
 import nzvpn.nzbozorg.ir.ui.NzViewModel
+import nzvpn.nzbozorg.ir.ui.UpdatePhase
 import nzvpn.nzbozorg.ir.ui.components.NzButton
 import nzvpn.nzbozorg.ir.ui.components.NzButtonStyle
 import nzvpn.nzbozorg.ir.ui.components.NzCard
@@ -82,20 +85,38 @@ import nzvpn.nzbozorg.ir.util.PersianText
 import java.io.File
 
 class MainActivity : ComponentActivity() {
+    private var openUpdateFromNotification by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        openUpdateFromNotification = intent?.action == UpdateAlerts.ACTION_OPEN_UPDATE
         enableEdgeToEdge()
         setContent {
-            // ⚠️ مهم: همهٔ صفحه‌ها باید داخل NzTheme باشند تا راست‌به‌چپ اجباری،
-            // فونت وزیرمتن و رنگ‌های برند اعمال شود.
-            NzTheme { NzRoot() }
+            // ⚠️ همهٔ صفحه‌ها داخل تم باشند: RTL، فونت فارسی و رنگ‌های برند.
+            NzTheme {
+                NzRoot(openUpdateFromNotification) { openUpdateFromNotification = false }
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        ViewModelProvider(this)[NzViewModel::class.java].refreshOnForeground()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == UpdateAlerts.ACTION_OPEN_UPDATE) {
+            // نتیجهٔ بررسی قدیمی ممکن است CURRENT باشد؛ اول نسخهٔ تازه را دوباره بگیر.
+            ViewModelProvider(this)[NzViewModel::class.java].checkForUpdates()
+            openUpdateFromNotification = true
         }
     }
 }
 
 @Composable
-private fun NzRoot() {
+private fun NzRoot(openUpdateFromNotification: Boolean, onUpdateOpened: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val viewModel: NzViewModel = viewModel()
@@ -116,6 +137,23 @@ private fun NzRoot() {
 
     // ---------------------------------------------------------- راه‌اندازی
     LaunchedEffect(Unit) { viewModel.boot() }
+
+    LaunchedEffect(openUpdateFromNotification, showSplash, update.phase) {
+        if (!openUpdateFromNotification || showSplash) return@LaunchedEffect
+        showSettings = true
+        when (update.phase) {
+            UpdatePhase.AVAILABLE, UpdatePhase.PAUSED -> {
+                viewModel.downloadUpdate()
+                onUpdateOpened()
+            }
+            UpdatePhase.ERROR -> {
+                if (update.release != null) viewModel.downloadUpdate()
+                onUpdateOpened()
+            }
+            UpdatePhase.CURRENT, UpdatePhase.READY, UpdatePhase.DOWNLOADING -> onUpdateOpened()
+            UpdatePhase.IDLE, UpdatePhase.CHECKING -> Unit
+        }
+    }
 
     // ------------------------------------------------------- مجوزها و اتصال
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
@@ -142,12 +180,17 @@ private fun NzRoot() {
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { }
+    ) { granted ->
+        if (granted && update.hasPendingUpdate) update.release?.let {
+            UpdateAlerts.notifyIfNeeded(context, it)
+        }
+    }
 
     LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT >= 33) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     // ------------------------------------------------- انتخاب فایل کانفیگ
@@ -186,6 +229,7 @@ private fun NzRoot() {
                     state = state,
                     vpn = vpnStatus,
                     isWide = isWide,
+                    updateAvailable = update.hasPendingUpdate,
                     onConnect = {
                         val prepared = VpnService.prepare(context)
                         if (prepared != null) vpnPermissionLauncher.launch(prepared) else connect(context, viewModel)
@@ -202,6 +246,17 @@ private fun NzRoot() {
                             }
                         }
                     },
+                    onSmartConnectGroup = { name ->
+                        viewModel.smartConnect(name) { best ->
+                            if (best != null) {
+                                val prepared = VpnService.prepare(context)
+                                if (prepared != null) vpnPermissionLauncher.launch(prepared)
+                                else connect(context, viewModel)
+                            } else {
+                                scope.launch { snackbarHost.showSnackbar("در پوشهٔ «$name» سرور پاسخ‌گویی پیدا نشد") }
+                            }
+                        }
+                    },
                     onAdd = { showAddSheet = true },
                     onDonate = { showDonate = true },
                     onShare = { shareApp(context, snackbarHost, scope) },
@@ -211,8 +266,10 @@ private fun NzRoot() {
                     onTestGroup = { viewModel.testGroup(it) },
                     onSelect = { viewModel.select(it) },
                     onDeleteServer = { pendingDelete = it },
+                    onToggleSaved = { viewModel.toggleSaved(it) },
                     onDeleteGroup = { pendingGroup = it },
                     onToggleGroup = { viewModel.toggleGroup(it) },
+                    onMoveGroup = { name, steps -> viewModel.moveGroup(name, steps) },
                 )
             }
         }
@@ -260,6 +317,7 @@ private fun NzRoot() {
     if (showSettings) {
         SettingsSheet(
             update = update,
+            subscriptions = state.subscriptions,
             appVersion = BuildConfig.VERSION_NAME,
             onDismiss = { showSettings = false },
             onOpenRepo = { viewModel.openUrl(BrandConfig.DEFAULT_REPO) },
@@ -270,6 +328,13 @@ private fun NzRoot() {
             },
             onCheck = { viewModel.checkForUpdates() },
             onDownload = { viewModel.downloadUpdate() },
+            onPauseDownload = { viewModel.pauseUpdateDownload() },
+            onCancelDownload = { viewModel.cancelUpdateDownload() },
+            onRemoveSubscription = { viewModel.deleteSubscription(it) },
+            onRestoreRepo = {
+                showSettings = false
+                viewModel.restoreFromRepo()
+            },
             onInstall = {
                 val apk = viewModel.readyUpdateFile()
                 if (apk == null) {
@@ -312,7 +377,7 @@ private fun NzRoot() {
             },
             onFetchRepo = {
                 showAddSheet = false
-                viewModel.refreshFromRepo()
+                viewModel.restoreFromRepo()
             },
         )
     }
@@ -445,7 +510,8 @@ private fun launchVerifiedInstaller(
 private fun connect(context: Context, viewModel: NzViewModel) {
     val profile = viewModel.selectedProfile() ?: return
     val config = viewModel.configFor(profile)
-    NzVpnService.start(context, config, profile.displayName, profile.latencyMs)
+    NzVpnService.start(context, config, profile.displayName, profile.id,
+        nzvpn.nzbozorg.ir.data.SavedProfiles.connectedGroup(profile), profile.latencyMs)
 }
 
 /** متن کلیپ‌بورد */

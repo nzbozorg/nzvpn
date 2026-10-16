@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import nzvpn.nzbozorg.ir.BuildConfig
 import nzvpn.nzbozorg.ir.brand.BrandConfig
 import nzvpn.nzbozorg.ir.core.XrayConfigBuilder
@@ -25,12 +26,16 @@ import nzvpn.nzbozorg.ir.data.AppPrefs
 import nzvpn.nzbozorg.ir.data.GroupNaming
 import nzvpn.nzbozorg.ir.data.GroupSource
 import nzvpn.nzbozorg.ir.data.GroupUpdates
+import nzvpn.nzbozorg.ir.data.GroupOrder
+import nzvpn.nzbozorg.ir.data.SavedProfiles
+import nzvpn.nzbozorg.ir.data.RepoVisibility
 import nzvpn.nzbozorg.ir.data.RepoServerLabels
 import nzvpn.nzbozorg.ir.data.ServerStore
 import nzvpn.nzbozorg.ir.model.Profile
 import nzvpn.nzbozorg.ir.model.Protocol
 import nzvpn.nzbozorg.ir.net.GithubRelease
 import nzvpn.nzbozorg.ir.net.GithubUpdateClient
+import nzvpn.nzbozorg.ir.net.UpdateAlerts
 import nzvpn.nzbozorg.ir.net.ReleaseCatalog
 import nzvpn.nzbozorg.ir.net.RepoClient
 import nzvpn.nzbozorg.ir.net.TrustedApk
@@ -48,7 +53,7 @@ import java.io.IOException
 /** مرحلهٔ راه‌اندازی که در صفحهٔ لودینگ نمایش داده می‌شود */
 enum class BootStage { IDLE, CORE, STORAGE, REPO, READY }
 
-enum class UpdatePhase { IDLE, CHECKING, CURRENT, AVAILABLE, DOWNLOADING, READY, ERROR }
+enum class UpdatePhase { IDLE, CHECKING, CURRENT, AVAILABLE, DOWNLOADING, PAUSED, READY, ERROR }
 
 data class UpdateUiState(
     val phase: UpdatePhase = UpdatePhase.IDLE,
@@ -56,7 +61,12 @@ data class UpdateUiState(
     val percent: Int = 0,
     val apkPath: String = "",
     val message: String = "",
-)
+) {
+    val hasPendingUpdate: Boolean get() = release != null && phase in setOf(
+        UpdatePhase.CHECKING, UpdatePhase.AVAILABLE, UpdatePhase.DOWNLOADING,
+        UpdatePhase.PAUSED, UpdatePhase.ERROR,
+    )
+}
 
 /** یک پوشه (ساب/گروه) در لیست سرورها */
 data class ServerGroup(
@@ -75,6 +85,8 @@ data class NzUiState(
     val coreVersion: String = "",
     val servers: List<Profile> = emptyList(),
     val groups: List<ServerGroup> = emptyList(),
+    /** ساب‌ها برای حذف از تنظیمات؛ گروه‌های مخزن هم اینجا دیده می‌شوند. */
+    val subscriptions: List<GroupSource> = emptyList(),
     val selectedId: String = "",
     val busy: Boolean = false,
     val busyText: String = "",
@@ -97,8 +109,8 @@ data class NzUiState(
 }
 
 /**
- * ViewModel اصلی برنامه؛ بخش تنظیمات فقط اطلاعات، حمایت، اشتراک‌گذاری و آپدیت دارد
- * و تنظیمات VPN/مخزن همچنان در کد ثابت‌اند.
+ * ViewModel اصلی برنامه؛ شیت تنظیمات اطلاعات، مدیریت ساب‌ها، حمایت،
+ * اشتراک‌گذاری و آپدیت را نشان می‌دهد؛ تنظیمات هستهٔ VPN در کد ثابت‌اند.
  *
  *  • راه‌اندازی هستهٔ Xray و بارگذاری سرورها
  *  • خواندن خودکار مخزن گیت‌هاب در اولین اجرا
@@ -122,7 +134,10 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     val vpnStatus = VpnBus.status
     val logs = AppLog.lines
 
-    private var collapsed: MutableSet<String> = prefs.collapsedSet().toMutableSet()
+    /** هر ورود همهٔ پوشه‌ها بسته است؛ باز/بستن فقط در همین نشست نگه‌داری می‌شود. */
+    private val expanded = mutableSetOf<String>()
+    private var groupOrder = prefs.groupOrder()
+    private var suppressedRepo = prefs.suppressedRepoLocations().toMutableSet()
 
     /** منابع و سرورها با هم در یک snapshot ذخیره می‌شوند؛ ذخیره‌ها آخرین وضعیت را می‌خوانند. */
     @Volatile private var sourcesByGroup: Map<String, GroupSource> = emptyMap()
@@ -132,10 +147,15 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     private var testJob: Job? = null
     private var groupTestJob: Job? = null
     private var repoJob: Job? = null
+    private var groupRefreshJob: Job? = null
+    private var foregroundRefreshJob: Job? = null
+    private var bootStarted = false
 
     // ------------------------------------------------------------ راه‌اندازی
 
     suspend fun boot() {
+        if (bootStarted) return
+        bootStarted = true
         _ui.value = _ui.value.copy(bootStage = BootStage.CORE, bootMessage = "آماده‌سازی هستهٔ اتصال…")
         val version = withContext(Dispatchers.IO) {
             runCatching {
@@ -160,46 +180,84 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
         _ui.value = _ui.value.copy(selectedId = selected)
         refreshGroups(servers)
 
-        if (servers.isEmpty() || (prefs.repoLoadedOnce && !prefs.sourcesMigrated)) {
-            // پس از ارتقا از نسخهٔ ۲، آدرس ساب‌های موجود را از مخزن دوباره شناسایی کن.
-            _ui.value = _ui.value.copy(bootStage = BootStage.REPO, bootMessage = "خواندن سرورها از مخزن…")
-            refreshFromRepo(silent = true)
-        }
-
+        // همهٔ ساب‌ها در هر ورود تازه می‌شوند. اگر هنوز هیچ سروری در حافظه نیست،
+        // پیش از ورود به خانه تا پایان بارگذاری صبر کن؛ شبکهٔ خراب نباید کاربر را
+        // برای همیشه در لودینگ زندانی کند (پس از ۱۵ ثانیه ورود/افزودن دستی آزاد است).
+        _ui.value = _ui.value.copy(bootStage = BootStage.REPO, bootMessage = "خواندن ساب‌ها از مخزن…")
+        val refresh = refreshAllOnLaunch()
+        val completed = if (servers.isEmpty()) {
+            withTimeoutOrNull(15_000L) { refresh.join(); true } == true
+        } else false
+        val count = _ui.value.servers.size
         _ui.value = _ui.value.copy(
             bootStage = BootStage.READY,
-            bootMessage = if (_ui.value.servers.isEmpty()) "آماده" else "${fa(_ui.value.servers.size)} سرور آماده است",
+            bootMessage = if (count == 0) "می‌تونی سرور رو با + اضافه کنی" else "${fa(count)} سرور آماده است",
+            message = if (count == 0 && !completed)
+                "بارگذاری ساب‌ها طول کشید؛ می‌تونی از + اضافه کنی یا کمی صبر کنی" else _ui.value.message,
         )
-        AppLog.d("راه‌اندازی کامل شد — ${_ui.value.servers.size} سرور")
+        checkForUpdates()
+        AppLog.d("راه‌اندازی کامل شد — $count سرور، رفرش پس‌زمینه: ${!refresh.isCompleted}")
+    }
+
+    private fun refreshAllOnLaunch(): Job {
+        foregroundRefreshJob = viewModelScope.launch {
+            refreshFromRepo(silent = true)
+            repoJob?.join()
+            // ساب‌ها و فایل‌های کاربر را هم بدون آسیب به پوشهٔ دیگر تازه کن.
+            val userSources = sourcesByGroup.values.filter { it.kind != GroupSource.Kind.REPO }.toList()
+            for (source in userSources) {
+                if (_ui.value.groups.none { it.name == source.group }) continue
+                refreshGroup(source.group, silent = true)
+                groupRefreshJob?.join()
+            }
+        }
+        return foregroundRefreshJob!!
+    }
+
+    /** هر بار ورود به پیش‌زمینه، بدون پرش انتخاب یا جایگزینیِ سرور متصل. */
+    fun refreshOnForeground() {
+        if (_ui.value.bootStage != BootStage.READY) return
+        if (foregroundRefreshJob?.isActive != true) refreshAllOnLaunch()
+        checkForUpdates()
     }
 
     private fun buildGroups(
         servers: List<Profile>,
         testingGroup: String = _ui.value.testingGroup,
         testingStartedAt: Long = _ui.value.testingGroupStartedAt,
-    ): List<ServerGroup> =
-        servers.groupBy { it.groupName }
-            .map { (name, list) ->
-                ServerGroup(
-                    name = name,
-                    profiles = if (name == testingGroup) {
-                        AutoSelector.sortByLiveQuality(list, testingStartedAt)
-                    } else AutoSelector.sortByQuality(list),
-                    collapsed = name in collapsed,
-                    source = sourcesByGroup[name],
-                    flagCountryCode = list.firstNotNullOfOrNull { PersianText.countryFlagCode(it.group) },
-                )
-            }
-            .sortedWith(compareBy({ it.name == BrandConfig.GROUP_REPO_FILE }, { it.name }))
+    ): List<ServerGroup> {
+        val grouped = servers.groupBy { it.groupName }
+        return GroupOrder.merge(groupOrder, grouped.keys).map { name ->
+            val list = grouped.getValue(name)
+            ServerGroup(
+                name = name,
+                profiles = if (name == testingGroup) {
+                    AutoSelector.sortByLiveQuality(list, testingStartedAt)
+                } else AutoSelector.sortByQuality(list),
+                collapsed = name !in expanded,
+                source = sourcesByGroup[name],
+                flagCountryCode = list.firstNotNullOfOrNull { PersianText.countryFlagCode(it.group) },
+            )
+        }
+    }
 
     private fun refreshGroups(servers: List<Profile>) {
         val state = _ui.value
         val labeled = RepoServerLabels.apply(
             servers, sourcesByGroup, state.testingGroup, state.testingGroupStartedAt,
         )
-        _ui.value = state.copy(servers = labeled, groups = buildGroups(
-            labeled, state.testingGroup, state.testingGroupStartedAt,
-        ))
+        val ordered = GroupOrder.merge(groupOrder, labeled.map { it.groupName })
+        if (ordered != groupOrder) {
+            groupOrder = ordered
+            prefs.saveGroupOrder(ordered)
+        }
+        _ui.value = state.copy(
+            servers = labeled,
+            groups = buildGroups(labeled, state.testingGroup, state.testingGroupStartedAt),
+            subscriptions = sourcesByGroup.values.filter { source ->
+                source.kind != GroupSource.Kind.FILE && ordered.contains(source.group)
+            }.sortedBy { ordered.indexOf(it.group) },
+        )
     }
 
     private fun persist() {
@@ -213,7 +271,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun occupiedGroups(): Set<String> =
-        _ui.value.groups.map { it.name }.toSet() + sourcesByGroup.keys
+        _ui.value.groups.map { it.name }.toSet() + sourcesByGroup.keys + BrandConfig.GROUP_SAVED
 
     private fun rawGroup(key: String): String =
         _ui.value.servers.firstOrNull { it.groupName == key }?.group ?: key
@@ -240,9 +298,33 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleGroup(name: String) {
-        if (!collapsed.remove(name)) collapsed.add(name)
-        prefs.saveCollapsed(collapsed)
+        if (!expanded.remove(name)) expanded.add(name)
         refreshGroups(_ui.value.servers)
+    }
+
+    /** نگه‌داشتن پوشه و کشیدن آن، حتی پوشهٔ ذخیره‌شده‌ها را جابه‌جا می‌کند. */
+    fun moveGroup(name: String, steps: Int) {
+        val next = GroupOrder.move(groupOrder, name, steps)
+        if (next == groupOrder) return
+        groupOrder = next
+        prefs.saveGroupOrder(next)
+        refreshGroups(_ui.value.servers)
+    }
+
+    /** اولین ستاره، پوشهٔ مستقل ذخیره‌شده‌ها را می‌سازد. */
+    fun toggleSaved(profile: Profile) {
+        val old = _ui.value.servers
+        val savedId = SavedProfiles.savedId(profile)
+        val saved = old.any { SavedProfiles.isSaved(it) && it.id == savedId }
+        val updated = if (saved) old.filterNot { SavedProfiles.isSaved(it) && it.id == savedId }
+            else old + SavedProfiles.save(profile)
+        if (updated.none { it.groupName == BrandConfig.GROUP_SAVED }) {
+            expanded.remove(BrandConfig.GROUP_SAVED)
+        }
+        refreshGroups(updated)
+        keepSelection(updated)
+        _ui.value = _ui.value.copy(message = if (saved) "از ذخیره‌شده‌ها برداشته شد" else "در ذخیره‌شده‌ها موند ⭐")
+        persist()
     }
 
     fun selectedProfile(): Profile? = _ui.value.selected
@@ -255,20 +337,44 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------- انتشار امضاشدهٔ گیت‌هاب
     fun checkForUpdates() {
         if (updateJob?.isActive == true) return
-        _update.value = UpdateUiState(phase = UpdatePhase.CHECKING)
+        val previous = _update.value
+        _update.value = previous.copy(phase = UpdatePhase.CHECKING, message = "")
         updateJob = viewModelScope.launch {
             try {
                 val release = githubUpdates.latest()
-                _update.value = if (ReleaseCatalog.isNewer(release.version, BuildConfig.VERSION_NAME)) {
-                    UpdateUiState(phase = UpdatePhase.AVAILABLE, release = release)
+                val app = getApplication<Application>()
+                if (ReleaseCatalog.isNewer(release.version, BuildConfig.VERSION_NAME)) {
+                    val ready = withContext(Dispatchers.IO) {
+                        val apk = githubUpdates.downloadedFile(app, release)
+                        if (apk.isFile && apk.length() == release.sizeBytes &&
+                            runCatching { TrustedApk.verify(app, apk); true }.getOrDefault(false)
+                        ) apk else { apk.delete(); null }
+                    }
+                    if (ready != null) {
+                        _update.value = UpdateUiState(
+                            phase = UpdatePhase.READY, release = release,
+                            apkPath = ready.absolutePath, percent = 100,
+                        )
+                        UpdateAlerts.dismiss(app)
+                    } else {
+                        val percent = githubUpdates.partialPercent(app, release)
+                        _update.value = UpdateUiState(
+                            phase = if (percent > 0) UpdatePhase.PAUSED else UpdatePhase.AVAILABLE,
+                            release = release, percent = percent,
+                        )
+                        UpdateAlerts.notifyIfNeeded(app, release)
+                    }
                 } else {
-                    UpdateUiState(phase = UpdatePhase.CURRENT)
+                    _update.value = UpdateUiState(phase = UpdatePhase.CURRENT)
+                    UpdateAlerts.dismiss(app)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 AppLog.e("بررسی انتشار گیت‌هاب ناموفق", e)
-                _update.value = UpdateUiState(
+                _update.value = if (previous.hasPendingUpdate) previous.copy(
+                    message = "بررسی تازه ناموفق بود؛ اطلاعات قبلی حفظ شد",
+                ) else UpdateUiState(
                     phase = UpdatePhase.ERROR,
                     message = (e as? IOException)?.message ?: "بررسی نسخه ناموفق بود؛ اینترنت را بررسی کنید",
                 )
@@ -277,35 +383,67 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun downloadUpdate() {
-        if (updateJob?.isActive == true) return
+        if (updateJob?.isActive == true) {
+            // توقف فوری ممکن است هنوز در حال بستن جریان شبکه باشد؛ پس از آن ادامه بده.
+            if (_update.value.phase == UpdatePhase.PAUSED) {
+                val previous = updateJob
+                viewModelScope.launch {
+                    previous?.join()
+                    if (_update.value.phase == UpdatePhase.PAUSED) downloadUpdate()
+                }
+            }
+            return
+        }
         val release = _update.value.release ?: return
-        if (_update.value.phase != UpdatePhase.AVAILABLE) return
-        _update.value = UpdateUiState(phase = UpdatePhase.DOWNLOADING, release = release)
+        if (_update.value.phase !in setOf(UpdatePhase.AVAILABLE, UpdatePhase.PAUSED, UpdatePhase.ERROR)) return
+        val app = getApplication<Application>()
+        _update.value = UpdateUiState(
+            phase = UpdatePhase.DOWNLOADING, release = release,
+            percent = githubUpdates.partialPercent(app, release),
+        )
         updateJob = viewModelScope.launch {
             try {
-                val apk = githubUpdates.download(getApplication(), release) { percent ->
+                val apk = githubUpdates.download(app, release) { percent ->
                     _update.update { state ->
-                        if (state.phase == UpdatePhase.DOWNLOADING && percent != state.percent) {
-                            state.copy(percent = percent)
-                        } else state
+                        if (state.phase == UpdatePhase.DOWNLOADING && percent != state.percent)
+                            state.copy(percent = percent) else state
                     }
                 }
-                withContext(Dispatchers.IO) { TrustedApk.verify(getApplication(), apk) }
+                withContext(Dispatchers.IO) { TrustedApk.verify(app, apk) }
                 _update.value = UpdateUiState(
                     phase = UpdatePhase.READY, release = release,
                     apkPath = apk.absolutePath, percent = 100,
                 )
+                UpdateAlerts.dismiss(app)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                File(getApplication<Application>().cacheDir, "updates/${release.fileName}").delete()
+                githubUpdates.downloadedFile(app, release).delete()
                 AppLog.e("دریافت یا اعتبارسنجی به‌روزرسانی ناموفق", e)
                 _update.value = UpdateUiState(
                     phase = UpdatePhase.ERROR, release = release,
-                    message = (e as? IOException)?.message ?: "فایل به‌روزرسانی دریافت نشد؛ دوباره امتحان کنید",
+                    percent = githubUpdates.partialPercent(app, release),
+                    message = (e as? IOException)?.message ?: "فایل به‌روزرسانی دریافت نشد؛ دوباره امتحان کن",
                 )
             }
         }
+    }
+
+    fun pauseUpdateDownload() {
+        if (_update.value.phase != UpdatePhase.DOWNLOADING) return
+        _update.value = _update.value.copy(phase = UpdatePhase.PAUSED, message = "دریافت متوقف شد")
+        updateJob?.cancel()
+        githubUpdates.interruptDownload()
+    }
+
+    fun cancelUpdateDownload() {
+        val release = _update.value.release ?: return
+        if (_update.value.phase !in setOf(
+                UpdatePhase.DOWNLOADING, UpdatePhase.PAUSED, UpdatePhase.ERROR, UpdatePhase.AVAILABLE,
+            )) return
+        _update.value = UpdateUiState(phase = UpdatePhase.AVAILABLE, release = release)
+        updateJob?.cancel()
+        githubUpdates.discard(getApplication(), release)
     }
 
     /** پیش از دادن فایل به نصب‌کننده، دوباره اصالت آن بررسی می‌شود. */
@@ -313,6 +451,18 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
         ?.apkPath?.takeIf { it.isNotBlank() }?.let(::File)
 
     // ------------------------------------------------------- مخزن گیت‌هاب
+
+    /** فقط این عملِ صریح، ساب‌های پیش‌فرض حذف‌شده در تنظیمات را برمی‌گرداند. */
+    fun restoreFromRepo() {
+        viewModelScope.launch {
+            // اگر رفرشِ خودکار/یک‌پوشه‌ای در جریان است، این درخواست دستی گم نشود.
+            repoJob?.join()
+            groupRefreshJob?.join()
+            suppressedRepo.clear()
+            prefs.saveSuppressedRepoLocations(suppressedRepo)
+            refreshFromRepo()
+        }
+    }
 
     fun refreshFromRepo(silent: Boolean = false) {
         if (repoJob?.isActive == true || _ui.value.refreshingGroup.isNotBlank()) {
@@ -327,40 +477,52 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching { repo.refresh(BrandConfig.DEFAULT_REPO) }
             }
             result.onSuccess { refreshed ->
-                applyRepoRefresh(refreshed)
+                applyRepoRefresh(refreshed, silent)
                 prefs.repoLoadedOnce = true
                 prefs.sourcesMigrated = true
                 refreshed.warnings.take(3).forEach { AppLog.d("هشدار: $it") }
             }.onFailure { t ->
                 AppLog.e("خواندن مخزن ناموفق", t)
-                if (!silent) {
+                if (!silent || _ui.value.servers.isEmpty()) {
                     _ui.value = _ui.value.copy(
                         busy = false, busyText = "",
-                        message = t.message ?: "خواندن مخزن ناموفق بود؛ سرورهای قبلی حفظ شدند",
+                        message = if (silent) "مخزن خوانده نشد؛ از + سرور اضافه کن یا دوباره تلاش کن"
+                            else t.message ?: "خواندن مخزن ناموفق بود؛ سرورهای قبلی حفظ شدند",
                     )
                 }
             }
         }
     }
 
-    /** رفرش سراسری هم پوشهٔ دستی را لمس نمی‌کند و سابِ ناموفق را حفظ می‌کند. */
-    private fun applyRepoRefresh(refreshed: RepoClient.RefreshResult) {
+    /** رفرش سراسری: حذف انتخابی مخزن، علاقه‌مندی و اتصال فعال را حفظ می‌کند. */
+    private fun applyRepoRefresh(refreshed: RepoClient.RefreshResult, silent: Boolean) {
         val current = _ui.value.servers
         val sources = sourcesByGroup.toMutableMap()
         val oldRepo = sources.values.filter { it.kind == GroupSource.Kind.REPO }
         val oldByUrl = oldRepo.associateBy { it.location }
-        val presentUrls = refreshed.subscriptions.map { it.link.url }.toSet()
+        val visibleSubs = refreshed.subscriptions.filter {
+            RepoVisibility.visible(it.link.url, suppressedRepo)
+        }
+        val direct = if (RepoVisibility.visible(RepoVisibility.DIRECT_FILE, suppressedRepo))
+            refreshed.directProfiles else emptyList()
+        val presentUrls = visibleSubs.map { it.link.url }.toMutableSet()
+        if (direct.isNotEmpty()) presentUrls += RepoVisibility.DIRECT_FILE
         val removed = oldRepo.filter { it.location !in presentUrls }.map { it.group }.toMutableSet()
         removed.forEach { sources.remove(it) }
 
         val reserved = (occupiedGroups() - oldRepo.map { it.group }.toSet() - BrandConfig.GROUP_REPO_FILE)
             .toMutableSet()
         val assigned = mutableSetOf<String>()
-        val replacement = refreshed.directProfiles.toMutableList()
+        val replacement = direct.toMutableList()
         val replacedGroups = removed.apply { add(BrandConfig.GROUP_REPO_FILE) }
-        for (loaded in refreshed.subscriptions) {
+        if (direct.isNotEmpty()) {
+            sources[BrandConfig.GROUP_REPO_FILE] = GroupSource(
+                BrandConfig.GROUP_REPO_FILE, GroupSource.Kind.REPO, RepoVisibility.DIRECT_FILE,
+            )
+        }
+        for (loaded in visibleSubs) {
             val old = oldByUrl[loaded.link.url]
-            // پوشه‌های نسخهٔ ۲ هنوز URL نداشتند: اگر نام منطبق است، همان را به ارث ببر.
+            // پوشه‌های نسخه‌های قدیمی آدرس ساب نداشتند؛ نامشان را نگه دار.
             val legacyKey = GroupNaming.key(loaded.link.name)
             val legacy = legacyKey.takeIf { candidate ->
                 !prefs.sourcesMigrated && candidate !in assigned && sources[candidate] == null &&
@@ -377,28 +539,38 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                 replacedGroups += key
                 replacement += loaded.profiles.map { it.copy(group = name) }
             }
-            // شکستِ دانلود بدون سرورِ قبلی پوشهٔ بی‌مصرف نمی‌سازد.
+            // شکست دانلود بدون سرور قبلی پوشهٔ بی‌مصرف نمی‌سازد.
             if (loaded.profiles != null || current.any { it.groupName == key }) {
                 sources[key] = GroupSource(key, GroupSource.Kind.REPO, loaded.link.url)
             }
         }
         val kept = current.filterNot { it.groupName in replacedGroups }
-        val merged = ServerStore.merge(kept, replacement)
+        val merged = keepActiveDuringRefresh(current, ServerStore.merge(kept, replacement))
         sourcesByGroup = sources.filterKeys { key -> merged.any { it.groupName == key } }
         refreshGroups(merged)
         keepSelection(merged)
-        val failed = refreshed.subscriptions.count { it.profiles == null }
-        val note = if (refreshed.profiles.isEmpty()) "سرور تازه‌ای در مخزن پیدا نشد"
-            else "${fa(refreshed.profiles.size)} سرور از مخزن خوانده شد"
+        val failed = visibleSubs.count { it.profiles == null }
+        val note = if (replacement.isEmpty()) "سرور تازه‌ای در مخزن پیدا نشد"
+            else "${fa(replacement.size)} سرور از مخزن خوانده شد"
         _ui.value = _ui.value.copy(
             busy = false, busyText = "",
-            message = if (failed > 0) "$note؛ ${fa(failed)} ساب خوانده نشد، قبلی‌ها حفظ شدند" else note,
+            message = if (silent && merged.isNotEmpty()) ""
+                else if (failed > 0) "$note؛ ${fa(failed)} ساب خوانده نشد، قبلی‌ها حفظ شدند" else note,
         )
         persist()
     }
 
+    private fun keepActiveDuringRefresh(old: List<Profile>, fresh: List<Profile>): List<Profile> {
+        // اگر ساب حتی لینک انتخاب‌شده را عوض کند، رفرش نباید انتخاب یا اتصال
+        // زنده را ناگهان به سرور دیگری ببرد. حذف دستی ساب از این مسیر نمی‌گذرد.
+        val status = VpnBus.status.value
+        val activeId = if (status.state in listOf(VpnState.CONNECTED, VpnState.CONNECTING))
+            status.profileId else ""
+        return GroupUpdates.retainForRefresh(old, fresh, _ui.value.selectedId, activeId)
+    }
+
     /** فقط همین ساب/فایل را از منبع ذخیره‌شده می‌خواند؛ شکست یا فایل خالی پوشه را دست نمی‌زند. */
-    fun refreshGroup(name: String) {
+    fun refreshGroup(name: String, silent: Boolean = false) {
         val source = sourcesByGroup[name] ?: return
         val originalGroup = rawGroup(name)
         if (repoJob?.isActive == true) {
@@ -406,7 +578,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (_ui.value.refreshingGroup.isNotBlank() || _ui.value.busy) return
-        viewModelScope.launch {
+        groupRefreshJob = viewModelScope.launch {
             _ui.value = _ui.value.copy(refreshingGroup = name)
             try {
                 val fetched = withContext(Dispatchers.IO) {
@@ -433,19 +605,20 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 fetched.onSuccess { profiles ->
                     if (profiles.isEmpty()) {
-                        _ui.value = _ui.value.copy(message = "«$name» خالی بود؛ سرورهای قبلی حفظ شدند")
+                        if (!silent) _ui.value = _ui.value.copy(message = "«$name» خالی بود؛ سرورهای قبلی حفظ شدند")
                     } else {
-                        val merged = GroupUpdates.replace(_ui.value.servers, name, profiles)
+                        val old = _ui.value.servers
+                        val merged = keepActiveDuringRefresh(old, GroupUpdates.replace(old, name, profiles))
                         refreshGroups(merged)
                         keepSelection(merged, name)
-                        _ui.value = _ui.value.copy(
+                        if (!silent) _ui.value = _ui.value.copy(
                             message = "پوشهٔ «$name» با ${fa(profiles.size)} سرور به‌روز شد",
                         )
                         persist()
                     }
                 }.onFailure { t ->
                     AppLog.e("به‌روزرسانی «$name» ناموفق", t)
-                    _ui.value = _ui.value.copy(
+                    if (!silent) _ui.value = _ui.value.copy(
                         message = "«$name» خوانده نشد؛ سرورهای قبلی حفظ شدند",
                     )
                 }
@@ -498,8 +671,9 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
      * اتصال هوشمند: تمام پوشه‌ها در نوبت مسابقه‌اند، فقط پاسخ موفقِ تازه انتخاب
      * می‌شود. سابقهٔ تست فقط ترتیب آزمون را تغییر می‌دهد، نه اجازهٔ اتصال را.
      */
-    fun smartConnect(onBest: (Profile?) -> Unit) {
-        val servers = _ui.value.servers
+    fun smartConnect(groupName: String? = null, onBest: (Profile?) -> Unit) {
+        val servers = if (groupName == null) _ui.value.servers
+            else _ui.value.groups.firstOrNull { it.name == groupName }?.profiles.orEmpty()
         if (servers.isEmpty()) {
             onBest(null)
             return
@@ -548,7 +722,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /** دکمهٔ تست هر پوشه: فقط سرورهای همان پوشه، دقیقاً یکی‌یکی؛ لمس دوباره = لغو. */
+    /** دکمهٔ تست هر پوشه: چهار آزمون محدود موازی؛ لمس دوباره = لغو. */
     fun testGroup(name: String) {
         if (_ui.value.testingGroup == name) {
             groupTestJob?.cancel()
@@ -571,12 +745,11 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
             )
             refreshGroups(_ui.value.servers)
             try {
-                val tested = AutoSelector.testGroupWithinOneSecond(
+                val tested = AutoSelector.testGroupResponsive(
                     profiles = group.profiles,
                     options = options(includeTun = false),
-                    budgetMs = 1_000L,
                 ) { progress ->
-                    // نتیجهٔ هر سرور همان لحظه در فهرست ظاهر و بر اساس پینگ مرتب می‌شود؛
+                    // نتیجهٔ هر سرور به‌محض پایان در فهرست ظاهر و بر اساس پینگ مرتب می‌شود؛
                     // کاربر لازم نیست تا پایان همهٔ سرورها منتظر بماند.
                     _ui.update { state ->
                         if (state.testingGroup != name) state else {
@@ -607,7 +780,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.value = _ui.value.copy(
                     message = if (best != null && visibleBest != null) {
                         "بهترین پینگ «$name»: ${visibleBest.displayName} — ${fa(best.latencyMs)}"
-                    } else "سرورهای «$name» توی مهلت یک‌ثانیه‌ای پینگ ندادند",
+                    } else "سرورهای «$name» توی مهلت تست پاسخی ندادند", 
                 )
                 persist()
             } finally {
@@ -835,8 +1008,17 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun remove(profile: Profile) {
+        if (SavedProfiles.isSaved(profile)) {
+            toggleSaved(profile)
+            return
+        }
         val servers = _ui.value.servers.filterNot { it.id == profile.id }
         if (servers.none { it.groupName == profile.groupName }) {
+            val source = sourcesByGroup[profile.groupName]
+            if (source?.kind == GroupSource.Kind.REPO) {
+                suppressedRepo.add(source.location)
+                prefs.saveSuppressedRepoLocations(suppressedRepo)
+            }
             sourcesByGroup = sourcesByGroup - profile.groupName
         }
         refreshGroups(servers)
@@ -845,11 +1027,28 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
         persist()
     }
 
+    /** دکمهٔ حذف داخل پوشه‌های پیش‌فرض/ذخیره‌شده‌ها عمداً وجود ندارد. */
     fun removeGroup(name: String) {
+        if (name == BrandConfig.GROUP_SAVED || sourcesByGroup[name]?.kind == GroupSource.Kind.REPO) return
+        deleteGroup(name)
+    }
+
+    /** حذف از تنظیمات شامل ساب‌های پیش‌فرض هم می‌شود؛ برگشت فقط با بازخوانی صریح است. */
+    fun deleteSubscription(name: String) {
+        val source = sourcesByGroup[name] ?: return
+        if (source.kind == GroupSource.Kind.REPO) {
+            suppressedRepo.add(source.location)
+            prefs.saveSuppressedRepoLocations(suppressedRepo)
+        }
+        deleteGroup(name)
+    }
+
+    private fun deleteGroup(name: String) {
         val servers = _ui.value.servers.filterNot { it.groupName == name }
         sourcesByGroup = sourcesByGroup - name
-        collapsed.remove(name)
-        prefs.saveCollapsed(collapsed)
+        expanded.remove(name)
+        groupOrder = groupOrder.filterNot { it == name }
+        prefs.saveGroupOrder(groupOrder)
         refreshGroups(servers)
         keepSelection(servers)
         _ui.value = _ui.value.copy(message = "پوشهٔ «$name» حذف شد")

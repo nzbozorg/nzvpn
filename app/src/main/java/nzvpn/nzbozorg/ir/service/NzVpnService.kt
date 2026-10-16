@@ -73,14 +73,16 @@ class NzVpnService : VpnService() {
             ACTION_START -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG).orEmpty()
                 val name = intent.getStringExtra(EXTRA_NAME).orEmpty()
+                val profileId = intent.getStringExtra(EXTRA_PROFILE_ID).orEmpty()
+                val group = intent.getStringExtra(EXTRA_GROUP).orEmpty()
                 val latency = intent.getLongExtra(EXTRA_LATENCY, -1L)
                 if (config.isBlank()) {
                     AppLog.e("start requested without config")
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startForegroundCompat(name)
-                scope.launch { connect(config, name, latency) }
+                startForegroundCompat(group, name)
+                scope.launch { connect(config, name, profileId, group, latency) }
             }
 
             else -> {
@@ -111,9 +113,12 @@ class NzVpnService : VpnService() {
 
     // ---------------------------------------------------------------- connect
 
-    private suspend fun connect(configJson: String, name: String, latency: Long) {
+    private suspend fun connect(
+        configJson: String, name: String, profileId: String, group: String, latency: Long,
+    ) {
         VpnBus.update {
-            it.copy(state = VpnState.CONNECTING, profileName = name, latencyMs = latency, message = "")
+            it.copy(state = VpnState.CONNECTING, profileName = name, profileId = profileId,
+                groupName = group, latencyMs = latency, message = "")
         }
         try {
             closeTun()
@@ -255,8 +260,9 @@ class NzVpnService : VpnService() {
 
     // ----------------------------------------------------------- notification
 
-    private fun startForegroundCompat(serverName: String) {
-        val notification = buildNotification(getString(R.string.notif_title_connecting), serverName)
+    private fun startForegroundCompat(group: String, serverName: String) {
+        val label = listOf(group, serverName).filter { it.isNotBlank() }.joinToString(" / ")
+        val notification = buildNotification(getString(R.string.notif_title_connecting), label)
         try {
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
@@ -273,7 +279,8 @@ class NzVpnService : VpnService() {
     private fun updateNotification() {
         val status = VpnBus.status.value
         if (status.state != VpnState.CONNECTED) return
-        val text = "${status.server}  ↑${PersianText.bytes(status.upBytes)}  ↓${PersianText.bytes(status.downBytes)}"
+        val label = listOf(status.groupName, status.profileName).filter { it.isNotBlank() }.joinToString(" / ")
+        val text = "$label  ↑${PersianText.bytes(status.upBytes)}  ↓${PersianText.bytes(status.downBytes)}"
         runCatching {
             getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildNotification(getString(R.string.notif_title_connected), text))
         }
@@ -320,17 +327,24 @@ class NzVpnService : VpnService() {
 
         private const val EXTRA_CONFIG = "extra_config"
         private const val EXTRA_NAME = "extra_name"
+        private const val EXTRA_PROFILE_ID = "extra_profile_id"
+        private const val EXTRA_GROUP = "extra_group"
         private const val EXTRA_LATENCY = "extra_latency"
         private const val NOTIF_ID = 1001
 
         /** آدرس کلاینت داخل تونل (انتخاب v2rayNG: 10.10.14.1/30 هم رایج است) */
         const val TUN_ADDRESS = "10.10.10.2"
 
-        fun start(context: Context, configJson: String, name: String, latencyMs: Long = -1L) {
+        fun start(
+            context: Context, configJson: String, name: String,
+            profileId: String, group: String, latencyMs: Long = -1L,
+        ) {
             val intent = Intent(context, NzVpnService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_CONFIG, configJson)
                 .putExtra(EXTRA_NAME, name)
+                .putExtra(EXTRA_PROFILE_ID, profileId)
+                .putExtra(EXTRA_GROUP, group)
                 .putExtra(EXTRA_LATENCY, latencyMs)
             ContextCompat.startForegroundService(context, intent)
         }

@@ -43,6 +43,15 @@ object GroupNaming {
 
 /** به‌روزرسانی موفق فقط همان پوشه را جایگزین می‌کند؛ دانلود ناموفق هرگز به این تابع نمی‌رسد. */
 object GroupUpdates {
+    /** رفرش شبکه حق ندارد انتخاب کاربر یا سروری را که تونل با آن ساخته شده بپراند. */
+    fun retainForRefresh(
+        existing: List<Profile>, fresh: List<Profile>, selectedId: String, connectedId: String,
+    ): List<Profile> {
+        val keepIds = setOf(selectedId, connectedId) - ""
+        val present = fresh.mapTo(mutableSetOf()) { it.id }
+        return fresh + existing.filter { it.id in keepIds && it.id !in present }
+    }
+
     fun replace(existing: List<Profile>, group: String, fresh: List<Profile>): List<Profile> {
         require(fresh.isNotEmpty()) { "پاسخ خالی است؛ پوشهٔ قبلی باید حفظ شود" }
         val previous = existing.filter { it.groupName == group }.associateBy { it.id }
