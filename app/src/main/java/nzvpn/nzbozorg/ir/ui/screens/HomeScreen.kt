@@ -28,14 +28,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -58,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import nzvpn.nzbozorg.ir.R
 import nzvpn.nzbozorg.ir.brand.BrandConfig
 import nzvpn.nzbozorg.ir.data.GroupSource
+import nzvpn.nzbozorg.ir.data.SubscriptionQuota
+import nzvpn.nzbozorg.ir.data.SubscriptionQuotaVisibility
 import nzvpn.nzbozorg.ir.data.SavedProfiles
 import nzvpn.nzbozorg.ir.model.Profile
 import nzvpn.nzbozorg.ir.service.VpnState
@@ -120,6 +126,7 @@ fun HomeScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val edge = with(LocalDensity.current) { 80.dp.toPx() }
+    var quotaGroup by remember { mutableStateOf<String?>(null) }
 
     NzBackground {
         Column(
@@ -154,6 +161,7 @@ fun HomeScreen(
                         onConnect = onConnect,
                         onDisconnect = onDisconnect,
                         onSmartConnect = onSmartConnect,
+                        onToggleSaved = onToggleSaved,
                     )
                 }
 
@@ -197,12 +205,17 @@ fun HomeScreen(
                             testedTotal = state.testingGroupTotal,
                             refreshing = state.refreshingGroup == group.name,
                             canTest = state.testingGroup.isEmpty() && !state.testing,
+                            canSmart = vpn.state == VpnState.DISCONNECTED,
                             canRefresh = state.refreshingGroup.isEmpty() && !state.busy,
                             onToggle = { onToggleGroup(group.name) },
                             onRefresh = { onRefreshGroup(group.name) },
                             onTest = { onTestGroup(group.name) },
                             onSmartConnect = { onSmartConnectGroup(group.name) },
                             onDelete = { onDeleteGroup(group.name) },
+                            quota = state.subscriptionQuotas[group.name].takeIf {
+                                SubscriptionQuotaVisibility.canShow(group.source, it)
+                            },
+                            onQuota = { quotaGroup = group.name },
                             onMove = { steps -> onMoveGroup(group.name, steps) },
                             onDragPosition = { localY ->
                                 val row = listState.layoutInfo.visibleItemsInfo.firstOrNull {
@@ -239,6 +252,46 @@ fun HomeScreen(
             }
         }
     }
+    val shownQuota = quotaGroup?.let { name ->
+        val group = state.groups.firstOrNull { it.name == name }
+        state.subscriptionQuotas[name]?.takeIf {
+            SubscriptionQuotaVisibility.canShow(group?.source, it)
+        }?.let { name to it }
+    }
+    if (shownQuota != null) {
+        QuotaDialog(shownQuota.first, shownQuota.second, onDismiss = { quotaGroup = null })
+    }
+}
+
+@Composable
+private fun QuotaDialog(name: String, quota: SubscriptionQuota, onDismiss: () -> Unit) {
+    val colors = NzTheme.colors
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surfaceElevated,
+        titleContentColor = colors.textPrimary,
+        title = { Text("حجم ساب «$name»") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("مصرف‌شده: ${PersianText.bytes(quota.usedBytes)}",
+                    color = colors.textPrimary)
+                Box(Modifier.fillMaxWidth().height(10.dp)
+                    .clip(RoundedCornerShape(5.dp)).background(colors.border)) {
+                    Box(Modifier.fillMaxWidth(quota.usedFraction).height(10.dp)
+                        .background(if (quota.usedFraction > 0.9f) colors.redSoft else colors.cyan))
+                }
+                Text("باقی‌مانده: ${PersianText.bytes(quota.remainingBytes)}",
+                    color = colors.cyan)
+                Text("حجم کل: ${PersianText.bytes(quota.totalBytes)}",
+                    color = colors.textSecondary)
+                Text("طبق آخرین آمار اعلام‌شدهٔ سرویس ساب؛ برای آمار تازه پوشه رو به‌روز کن.",
+                    style = MaterialTheme.typography.bodySmall, color = colors.textMuted)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("باشه", color = colors.copperBright) }
+        },
+    )
 }
 
 // ------------------------------------------------------------------ نوار بالا
@@ -341,6 +394,7 @@ private fun ConnectionPanel(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onSmartConnect: () -> Unit,
+    onToggleSaved: (Profile) -> Unit,
 ) {
     val colors = NzTheme.colors
     val connected = vpn.state == VpnState.CONNECTED
@@ -348,30 +402,26 @@ private fun ConnectionPanel(
     val selected = state.selected
 
     NzCard(elevated = true, live = connected) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            NzStatusPill(
-                visual = vpnStatusVisual(vpn.state),
-                pulsing = vpn.state == VpnState.CONNECTING,
-            )
-            if (connected) {
-                NzTrafficRow(up = vpn.upBytes, down = vpn.downBytes)
-            }
+        NzStatusPill(
+            visual = vpnStatusVisual(vpn.state),
+            pulsing = connecting,
+        )
+        if (connected) {
+            Spacer(Modifier.height(12.dp))
+            NzTrafficRow(up = vpn.upBytes, down = vpn.downBytes)
         }
 
         Spacer(Modifier.height(14.dp))
 
-        val shownProfile = if (connected) {
-            state.servers.firstOrNull { it.id == vpn.profileId }
+        val tunnelActive = connected || connecting || vpn.state == VpnState.STOPPING
+        val shownProfile = if (tunnelActive) {
+            state.servers.firstOrNull { it.id == vpn.profileId } ?: selected
         } else selected
-        val groupLabel = if (connected) vpn.groupName else selected?.originGroup
-            ?.ifBlank { selected.groupName }.orEmpty()
+        val groupLabel = if (tunnelActive && vpn.groupName.isNotBlank()) vpn.groupName
+            else shownProfile?.let { it.originGroup.ifBlank { it.groupName } }.orEmpty()
         val serverLabel = when {
-            vpn.server.isNotBlank() && connected -> vpn.server
-            connected && vpn.profileName.isNotBlank() -> vpn.profileName
+            vpn.server.isNotBlank() && tunnelActive -> vpn.server
+            tunnelActive && vpn.profileName.isNotBlank() -> vpn.profileName
             shownProfile != null -> shownProfile.displayName
             else -> "سروری انتخاب نشده"
         }
@@ -388,9 +438,20 @@ private fun ConnectionPanel(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (shownProfile != null) {
+                val starred = SavedProfiles.isStarred(state.servers, shownProfile)
+                NzIconButton(
+                    kind = NzIconKind.STAR,
+                    contentDescription = if (starred) "برداشتن سرور فعلی از ذخیره‌شده‌ها"
+                        else "ذخیره‌کردن سرور فعلی در ذخیره‌شده‌ها",
+                    onClick = { onToggleSaved(shownProfile) },
+                    active = starred,
+                    tint = if (starred) colors.copperBright else colors.textMuted,
+                )
+            }
         }
 
-        val endpoint = if (connected) shownProfile?.endpoint.orEmpty() else selected?.endpoint.orEmpty()
+        val endpoint = shownProfile?.endpoint.orEmpty()
         if (endpoint.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -423,16 +484,18 @@ private fun ConnectionPanel(
         }
 
         if (vpn.message.isNotBlank() && !connected) {
+            val error = vpn.state == VpnState.DISCONNECTED
             Spacer(Modifier.height(10.dp))
             Row(
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                NzIcon(NzIconKind.WARNING, size = 15.dp, tint = colors.redSoft)
+                NzIcon(if (error) NzIconKind.WARNING else NzIconKind.CLOCK,
+                    size = 15.dp, tint = if (error) colors.redSoft else colors.copperBright)
                 Text(
                     text = vpn.message,
                     style = MaterialTheme.typography.bodySmall,
-                    color = colors.redSoft,
+                    color = if (error) colors.redSoft else colors.textSecondary,
                 )
             }
         }
@@ -442,13 +505,14 @@ private fun ConnectionPanel(
         NzButton(
             text = when {
                 connected -> "قطع اتصال"
-                connecting -> "در حال اتصال…"
+                connecting -> "لغو اتصال"
+                vpn.state == VpnState.STOPPING -> "در حال قطع…"
                 else -> "اتصال"
             },
-            onClick = { if (connected) onDisconnect() else onConnect() },
-            leading = if (connected) NzIconKind.CLOSE else NzIconKind.POWER,
-            enabled = !connecting && (selected != null || connected),
-            style = if (connected) NzButtonStyle.SECONDARY else NzButtonStyle.PRIMARY,
+            onClick = { if (connected || connecting) onDisconnect() else onConnect() },
+            leading = if (connected || connecting) NzIconKind.CLOSE else NzIconKind.POWER,
+            enabled = vpn.state != VpnState.STOPPING && (selected != null || connected || connecting),
+            style = if (connected || connecting) NzButtonStyle.SECONDARY else NzButtonStyle.PRIMARY,
         )
 
         Spacer(Modifier.height(8.dp))
@@ -457,7 +521,7 @@ private fun ConnectionPanel(
             text = "اتصال به سریع‌ترین سرور",
             onClick = onSmartConnect,
             leading = NzIconKind.BOLT,
-            enabled = !connecting && state.servers.isNotEmpty(),
+            enabled = vpn.state == VpnState.DISCONNECTED && state.servers.isNotEmpty(),
             style = NzButtonStyle.SECONDARY,
         )
     }
@@ -503,12 +567,15 @@ private fun GroupHeader(
     testedTotal: Int,
     refreshing: Boolean,
     canTest: Boolean,
+    canSmart: Boolean,
     canRefresh: Boolean,
     onToggle: () -> Unit,
     onRefresh: () -> Unit,
     onTest: () -> Unit,
     onSmartConnect: () -> Unit,
     onDelete: () -> Unit,
+    quota: SubscriptionQuota?,
+    onQuota: () -> Unit,
     onMove: (Int) -> Unit,
     onDragPosition: (Float) -> Unit,
 ) {
@@ -621,7 +688,16 @@ private fun GroupHeader(
                 color = colors.cyan,
             )
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.End) {
+            if (group.source?.kind == GroupSource.Kind.SUBSCRIPTION && quota != null) {
+                NzIconButton(
+                    kind = NzIconKind.INFO,
+                    contentDescription = "نمایش حجم ساب ${group.name}",
+                    onClick = onQuota,
+                    tint = colors.cyan,
+                )
+            }
             if (group.source != null) {
                 NzIconButton(
                     kind = NzIconKind.REFRESH,
@@ -646,7 +722,7 @@ private fun GroupHeader(
                 contentDescription = "اتصال به اولین سرور پاسخ‌گوی پوشهٔ ${group.name}",
                 onClick = onSmartConnect,
                 tint = colors.copperBright,
-                enabled = canTest && !refreshing && !testing,
+                enabled = canSmart && canTest && !refreshing && !testing,
             )
             if (group.name != BrandConfig.GROUP_SAVED && group.source?.kind != GroupSource.Kind.REPO) {
                 NzIconButton(

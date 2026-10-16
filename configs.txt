@@ -1,2 +1,0 @@
-sub: https://sub.vlessfo.ru/vlessforu/working_configs.txt#NZSUB-1
-sub: https://raw.githubusercontent.com/4n0nymou3/multi-proxy-config-fetcher/refs/heads/main/configs/proxy_configs.txt#Anonymous%20%F0%9D%95%8F#NZSUB-2

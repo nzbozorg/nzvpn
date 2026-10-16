@@ -14,8 +14,9 @@ object BrandConfig {
     const val TAGLINE = "شبکهٔ امن، ساده و سریع"
 
     // ---------------------------------------------------------------- لینک‌ها
-    const val WEBSITE = "https://nzbozorg.ir"
-    const val TELEGRAM = "https://t.me/nzbozorg"
+    const val WEBSITE = "https://nzbozorg.ir/"
+    const val TELEGRAM = "https://t.me/NZBoZorg"
+    const val GITHUB_PROFILE = "https://github.com/nzbozorg"
     const val SUPPORT_EMAIL = "support@nzbozorg.ir"
 
     /** لینک حمایت اختیاری با فنجان قهوه، بدون اصرار یا متن دستوری. */
@@ -30,14 +31,14 @@ object BrandConfig {
 
     // ------------------------------------------------------- اشتراک‌گذاری
     /** نسخهٔ برنامه (همین‌جا عوض کنید) */
-    const val VERSION_NAME = "1.0.9"
+    const val VERSION_NAME = "1.1.0"
 
     /** متنی که با دکمهٔ اشتراک‌گذاری برای دیگران فرستاده می‌شود */
     const val SHARE_TEXT = "NZVPN — اینترنت آزاد، ساده و سریع 🔒\n" +
         "بدون تبلیغ، بدون ثبت‌نام. فایل نصبی همین‌جا پیوست است؛ نصب کن و استفاده کن.\n\n" +
         "سورس و انتشارها: https://github.com/nzbozorg/nzvpn\n" +
-        "وب‌سایت: https://nzbozorg.ir\n" +
-        "کانال تلگرام: https://t.me/nzbozorg"
+        "وب‌سایت: https://nzbozorg.ir/\n" +
+        "کانال تلگرام: https://t.me/NZBoZorg"
 
     // ------------------------------------------------------------------ مخزن
     /** مخزن عمومی کانفیگ‌ها و GitHub Releases برای به‌روزرسانی امضاشدهٔ اپ */

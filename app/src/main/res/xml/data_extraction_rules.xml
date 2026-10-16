@@ -2,11 +2,13 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="nzvpn.xml" />
+        <exclude domain="sharedpref" path="nzvpn_subscription_quotas.xml" />
         <exclude domain="file" path="servers.json" />
         <exclude domain="file" path="custom_servers/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="nzvpn.xml" />
+        <exclude domain="sharedpref" path="nzvpn_subscription_quotas.xml" />
         <exclude domain="file" path="servers.json" />
         <exclude domain="file" path="custom_servers/" />
     </device-transfer>

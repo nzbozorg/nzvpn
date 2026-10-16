@@ -11,6 +11,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import nzvpn.nzbozorg.ir.service.VpnState
 import nzvpn.nzbozorg.ir.ui.theme.NzTheme
@@ -114,7 +119,7 @@ fun NzLatencyBadge(latencyMs: Long, modifier: Modifier = Modifier) {
     }
 }
 
-/** سطر آماری (آپلود/دانلود) با آیکون و عدد مونو */
+/** آمار ترافیک در سطری جدا از نشان وضعیت؛ هر مقدار عرض مستقل دارد و نمی‌شکند. */
 @Composable
 fun NzTrafficRow(
     up: Long,
@@ -122,17 +127,25 @@ fun NzTrafficRow(
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NzIcon(kind = NzIconKind.UPLOAD, size = 14.dp, tint = NzTheme.colors.copperBright)
-            Text(formatBytes(up), style = NzTheme.mono.value, color = NzTheme.colors.textSecondary)
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NzIcon(kind = NzIconKind.DOWNLOAD, size = 14.dp, tint = NzTheme.colors.cyan)
-            Text(formatBytes(down), style = NzTheme.mono.value, color = NzTheme.colors.textSecondary)
+        TrafficValue("آپلود", NzIconKind.UPLOAD, up, NzTheme.colors.copperBright, Modifier.weight(1f))
+        TrafficValue("دانلود", NzIconKind.DOWNLOAD, down, NzTheme.colors.cyan, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun TrafficValue(label: String, icon: NzIconKind, bytes: Long, accent: Color, modifier: Modifier) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        NzIcon(kind = icon, size = 16.dp, tint = accent)
+        Spacer(Modifier.width(7.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = NzTheme.colors.textMuted,
+                maxLines = 1)
+            Text(formatBytes(bytes), style = NzTheme.mono.value, color = NzTheme.colors.textSecondary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

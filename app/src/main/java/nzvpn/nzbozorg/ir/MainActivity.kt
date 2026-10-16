@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -122,6 +123,7 @@ private fun NzRoot(openUpdateFromNotification: Boolean, onUpdateOpened: () -> Un
     val viewModel: NzViewModel = viewModel()
     val state by viewModel.ui.collectAsState()
     val update by viewModel.update.collectAsState()
+    val installedNotes by viewModel.installedNotes.collectAsState()
     val vpnStatus by viewModel.vpnStatus.collectAsState()
     val snackbarHost = remember { SnackbarHostState() }
 
@@ -275,6 +277,37 @@ private fun NzRoot(openUpdateFromNotification: Boolean, onUpdateOpened: () -> Un
         }
     }
 
+    // پس از ارتقا و پس از آماده‌شدن خانه؛ متنِ منتشرنشده/نسخهٔ دیگر نمایش داده نمی‌شود.
+    val notes = installedNotes
+    if (!showSplash && !showSettings && !showAddSheet && !showDonate && !state.testing &&
+        pendingDelete == null && pendingGroup == null && notes != null
+    ) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissInstalledReleaseNotes() },
+            containerColor = NzTheme.colors.surfaceElevated,
+            title = {
+                Text("تغییرات نسخهٔ ${nzvpn.nzbozorg.ir.util.PersianText.digits(notes.version)}",
+                    color = NzTheme.colors.textPrimary)
+            },
+            text = {
+                Column(Modifier.fillMaxWidth().heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(notes.title, style = MaterialTheme.typography.titleSmall,
+                        color = NzTheme.colors.copperBright)
+                    // متن Markdown دریافتی از GitHub فقط به‌صورت متن ساده نشان داده می‌شود.
+                    Text(notes.body, style = MaterialTheme.typography.bodyMedium,
+                        color = NzTheme.colors.textSecondary)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.dismissInstalledReleaseNotes() }) {
+                    Text("خوندم", color = NzTheme.colors.copperBright)
+                }
+            },
+        )
+    }
+
     // ------------------------------------------------------- پاپ‌آپ اتصال هوشمند
     if (state.testing) {
         // فقط عنوان و حلقهٔ در حال چرخش؛ بازگشت/لمس بیرون برای لغو آزمون طولانی.
@@ -321,6 +354,9 @@ private fun NzRoot(openUpdateFromNotification: Boolean, onUpdateOpened: () -> Un
             appVersion = BuildConfig.VERSION_NAME,
             onDismiss = { showSettings = false },
             onOpenRepo = { viewModel.openUrl(BrandConfig.DEFAULT_REPO) },
+            onOpenChannel = { viewModel.openUrl(BrandConfig.TELEGRAM) },
+            onOpenWebsite = { viewModel.openUrl(BrandConfig.WEBSITE) },
+            onOpenProfile = { viewModel.openUrl(BrandConfig.GITHUB_PROFILE) },
             onDonate = { showSettings = false; showDonate = true },
             onShare = {
                 showSettings = false

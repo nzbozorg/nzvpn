@@ -159,6 +159,31 @@ class GithubUpdateClient(
         }
     }
 
+    /** تنها tag نسخهٔ نصب‌شده؛ آخرین انتشارِ نسخه‌ای دیگر نباید جای آن نشان داده شود. */
+    suspend fun installedReleaseNotes(installed: String): InstalledReleaseNotes? = withContext(Dispatchers.IO) {
+        val version = ReleaseCatalog.normalizeVersion(installed)
+        for (tag in listOf("v$version", version)) {
+            val request = Request.Builder()
+                .url("https://api.github.com/repos/nzbozorg/nzvpn/releases/tags/$tag")
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "NZVPN/${BrandConfig.VERSION_NAME}")
+                .build()
+            client.newCall(request).execute().use { response ->
+                when (response.code) {
+                    404 -> return@use // هنوز منتشر نشده؛ املای بدون v را هم امتحان کن.
+                    403, 429 -> throw IOException("گیت‌هاب فعلاً محدودیت درخواست دارد")
+                }
+                if (!response.isSuccessful) throw IOException("دریافت یادداشت انتشار ناموفق بود (${response.code})")
+                val body = response.body
+                if (body.contentLength() > 1_000_000) throw IOException("یادداشت انتشار بیش از حد بزرگ است")
+                val text = body.string()
+                if (text.length > 1_000_000) throw IOException("یادداشت انتشار بیش از حد بزرگ است")
+                return@withContext InstalledReleaseNotesPolicy.parse(text, version)
+            }
+        }
+        null
+    }
+
     fun partialFile(context: Context, release: GithubRelease): File =
         File(File(context.cacheDir, "updates"), "${release.fileName}.part")
 

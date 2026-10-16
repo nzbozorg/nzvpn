@@ -1,6 +1,8 @@
 package nzvpn.nzbozorg.ir.net
 
 import nzvpn.nzbozorg.ir.brand.BrandConfig
+import nzvpn.nzbozorg.ir.data.SubscriptionQuota
+import nzvpn.nzbozorg.ir.data.SubscriptionQuotaParser
 import nzvpn.nzbozorg.ir.model.Profile
 import nzvpn.nzbozorg.ir.parser.SubscriptionParser
 import nzvpn.nzbozorg.ir.util.AppLog
@@ -76,11 +78,20 @@ class RepoClient {
         return RefreshResult(parsed.profiles, subscriptions, warnings)
     }
 
-    /** دانلود یک ساب دلخواه (از کلیپ‌بورد یا فایل) */
-    fun fetchSubscription(url: String, groupName: String): SubscriptionParser.Result {
-        val body = fetchText(SubscriptionParser.subLink(url).url)
-        return SubscriptionParser.parseSubscriptionBody(body, groupName)
+    data class FetchedSubscription(
+        val parsed: SubscriptionParser.Result,
+        val quota: SubscriptionQuota?,
+    )
+
+    /** حجم فقط از هدرِ همان پاسخِ ساب خوانده می‌شود، نه از تخمین مصرف VPN. */
+    fun fetchSubscriptionWithQuota(url: String, groupName: String): FetchedSubscription {
+        val (body, quota) = fetchTextAndQuota(SubscriptionParser.subLink(url).url)
+        return FetchedSubscription(SubscriptionParser.parseSubscriptionBody(body, groupName), quota)
     }
+
+    /** سایر خواندن‌ها، از جمله ساب‌های پیش‌فرض مخزن، حجم را دور می‌اندازند. */
+    fun fetchSubscription(url: String, groupName: String): SubscriptionParser.Result =
+        fetchSubscriptionWithQuota(url, groupName).parsed
 
     /** فایل اصلی (با همهٔ تبدیل‌های آدرس و fallback روی API گیت‌هاب) */
     fun fetchRepoFile(repoUrl: String): String {
@@ -96,23 +107,33 @@ class RepoClient {
             ?: IOException("فایل گیت‌هاب خوانده نشد${lastError?.message?.let { " ($it)" } ?: ""}")
     }
 
-    fun fetchText(url: String, accept: String? = null): String {
-        val builder = Request.Builder().url(url).header("User-Agent", "NZVPN/1.0")
+    fun fetchText(url: String, accept: String? = null): String = fetchTextAndQuota(url, accept).first
+
+    private fun fetchTextAndQuota(url: String, accept: String? = null): Pair<String, SubscriptionQuota?> {
+        val builder = Request.Builder().url(url).header("User-Agent", "NZVPN/1.1.0")
         if (accept != null) builder.header("Accept", accept)
 
         client.newCall(builder.build()).execute().use { response ->
-            val body = response.body.string()
             if (!response.isSuccessful) throw IOException(httpMessage(response.code, url))
+            // تنها هدرِ پاسخِ موفق معنا دارد. نبودنش یعنی سرویس آمار مصرف ارائه نمی‌کند.
+            val quota = SubscriptionQuotaParser.parse(
+                response.header("Subscription-Userinfo") ?: response.header("X-Subscription-Userinfo"),
+            )
+            val body = response.body.string()
             if (body.length > 4_000_000) throw IOException("فایل بزرگ‌تر از ۴ مگابایت است — این فایل ساب نیست")
-            return body
+            return body to quota
         }
     }
 
-    private fun httpMessage(code: Int, url: String): String = when (code) {
-        401, 403 -> "دسترسی رد شد (مخزن خصوصی است؟) — $url"
-        404 -> "فایل پیدا نشد؛ آدرس یا نام شاخه را چک کنید — $url"
-        429 -> "محدودیت نرخ گیت‌هاب؛ چند دقیقه بعد دوباره تلاش کنید"
-        else -> "خطای شبکه ($code) — $url"
+    private fun httpMessage(code: Int, url: String): String {
+        // URL ساب ممکن است توکن داشته باشد؛ آن را در پیام کاربر/لاگ کپی نکن.
+        val host = runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
+        return when (code) {
+            401, 403 -> "دسترسی رد شد (مخزن خصوصی است؟) — $host"
+            404 -> "فایل پیدا نشد؛ آدرس یا نام شاخه را چک کنید — $host"
+            429 -> "محدودیت نرخ گیت‌هاب؛ چند دقیقه بعد دوباره تلاش کنید"
+            else -> "خطای شبکه ($code) — $host"
+        }
     }
 
     private fun candidates(input: String): List<String> {

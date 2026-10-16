@@ -106,6 +106,19 @@ class AppPrefs private constructor(context: Context) {
         get() = sp.getString(KEY_NOTIFIED_VERSION, "").orEmpty()
         set(value) = sp.edit().putString(KEY_NOTIFIED_VERSION, value).apply()
 
+    /** فقط پس از نمایش و بستن پاپ‌آپ، این نسخه «خوانده‌شده» ثبت می‌شود. */
+    var shownReleaseNotesVersion: String
+        get() = sp.getString(KEY_NOTES_SHOWN, "").orEmpty()
+        set(value) = sp.edit().putString(KEY_NOTES_SHOWN, value).apply()
+
+    var releaseNotesAttemptVersion: String
+        get() = sp.getString(KEY_NOTES_ATTEMPT_VERSION, "").orEmpty()
+        set(value) = sp.edit().putString(KEY_NOTES_ATTEMPT_VERSION, value).apply()
+
+    var releaseNotesAttemptAt: Long
+        get() = sp.getLong(KEY_NOTES_ATTEMPT_AT, 0L)
+        set(value) = sp.edit().putLong(KEY_NOTES_ATTEMPT_AT, value).apply()
+
     companion object {
         private const val KEY_SELECTED = "selected"
         private const val KEY_LATENCY = "latency"
@@ -116,6 +129,9 @@ class AppPrefs private constructor(context: Context) {
         private const val KEY_GROUP_ORDER = "group_order_v1"
         private const val KEY_SUPPRESSED_REPO = "suppressed_repo_urls_v1"
         private const val KEY_NOTIFIED_VERSION = "last_notified_release"
+        private const val KEY_NOTES_SHOWN = "shown_release_notes_version_v1"
+        private const val KEY_NOTES_ATTEMPT_VERSION = "release_notes_attempt_version_v1"
+        private const val KEY_NOTES_ATTEMPT_AT = "release_notes_attempt_at_v1"
 
         @Volatile
         private var instance: AppPrefs? = null

@@ -54,6 +54,9 @@ fun SettingsSheet(
     appVersion: String,
     onDismiss: () -> Unit,
     onOpenRepo: () -> Unit,
+    onOpenChannel: () -> Unit,
+    onOpenWebsite: () -> Unit,
+    onOpenProfile: () -> Unit,
     onDonate: () -> Unit,
     onCheck: () -> Unit,
     onDownload: () -> Unit,
@@ -221,7 +224,16 @@ fun SettingsSheet(
                         style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
                     Text("ساخته‌شده با ❤️ به دست Amir NoZohour؛ رایگان و متن‌باز.",
                         style = MaterialTheme.typography.bodySmall, color = colors.textMuted)
-                    NzButton("دیدن سورس در گیت‌هاب", onOpenRepo, style = NzButtonStyle.SECONDARY)
+                    NzButton("دیدن سورس در گیت‌هاب", onOpenRepo,
+                        style = NzButtonStyle.SECONDARY, leading = NzIconKind.LINK_OUT)
+                    NzButton("ستاره دادن در گیت‌هاب", onOpenRepo,
+                        style = NzButtonStyle.SECONDARY, leading = NzIconKind.STAR)
+                    NzButton("اکانت شخصی در گیت‌هاب", onOpenProfile,
+                        style = NzButtonStyle.SECONDARY, leading = NzIconKind.LINK_OUT)
+                    NzButton("کانال تلگرام NZBOZORG", onOpenChannel,
+                        style = NzButtonStyle.SECONDARY, leading = NzIconKind.LINK_OUT)
+                    NzButton("سایت NZBOZORG", onOpenWebsite,
+                        style = NzButtonStyle.SECONDARY, leading = NzIconKind.GLOBE)
                 }
             }
 

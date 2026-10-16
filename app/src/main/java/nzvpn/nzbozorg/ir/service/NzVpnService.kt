@@ -18,6 +18,7 @@ import nzvpn.nzbozorg.ir.core.XrayCore
 import nzvpn.nzbozorg.ir.net.PingTargets
 import nzvpn.nzbozorg.ir.util.AppLog
 import nzvpn.nzbozorg.ir.util.PersianText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +52,8 @@ class NzVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var statsJob: Job? = null
+    private var connectJob: Job? = null
+    @Volatile private var stopping = false
     private var upTotal = 0L
     private var downTotal = 0L
     private val verifyPool = Executors.newFixedThreadPool(6) { task ->
@@ -81,8 +84,19 @@ class NzVpnService : VpnService() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                if (stopping || connectJob?.isActive == true ||
+                    VpnBus.status.value.state in setOf(VpnState.CONNECTED, VpnState.STOPPING)
+                ) {
+                    AppLog.d("start ignored: VPN already connecting/connected or stopping")
+                    return START_NOT_STICKY
+                }
+                // وضعیت پیش از dispatch شدن job عوض می‌شود تا دکمهٔ لغو فوراً فعال شود.
+                VpnBus.update {
+                    it.copy(state = VpnState.CONNECTING, profileName = name, profileId = profileId,
+                        groupName = group, latencyMs = latency, message = "", upBytes = 0, downBytes = 0)
+                }
                 startForegroundCompat(group, name)
-                scope.launch { connect(config, name, profileId, group, latency) }
+                connectJob = scope.launch { connect(config, name) }
             }
 
             else -> {
@@ -102,6 +116,8 @@ class NzVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        stopping = true
+        connectJob?.cancel()
         statsJob?.cancel()
         verifyPool.shutdownNow()
         XrayCore.stop()
@@ -113,14 +129,9 @@ class NzVpnService : VpnService() {
 
     // ---------------------------------------------------------------- connect
 
-    private suspend fun connect(
-        configJson: String, name: String, profileId: String, group: String, latency: Long,
-    ) {
-        VpnBus.update {
-            it.copy(state = VpnState.CONNECTING, profileName = name, profileId = profileId,
-                groupName = group, latencyMs = latency, message = "")
-        }
+    private suspend fun connect(configJson: String, name: String) {
         try {
+            currentCoroutineContext().ensureActive()
             closeTun()
             // مقادیر ثابت و آزمایش‌شده (هم‌راستا با v2rayNG):
             //   MTU 1500 · آدرس کلاینت /30 · مسیر همهٔ ترافیک · دی‌ان‌اس عمومی
@@ -143,8 +154,11 @@ class NzVpnService : VpnService() {
                 ?: throw IllegalStateException("ساخت اینترفیس VPN ممکن نشد (اجازه داده نشده؟)")
 
             tunInterface = pfd
+            currentCoroutineContext().ensureActive()
             VpnBus.update { it.copy(message = "روشن کردن هستهٔ اتصال…") }
             XrayCore.start(this, configJson, pfd.fd)
+            // startLoop بومی ممکن است مسدودکننده باشد؛ لغوِ حین اجرای آن را اینجا بگیر.
+            currentCoroutineContext().ensureActive()
 
             // بررسی واقعی: ترافیک از داخل تونل بیرون می‌رود یا نه؟
             VpnBus.update { it.copy(message = "بررسی اتصال…") }
@@ -157,16 +171,25 @@ class NzVpnService : VpnService() {
                 )
             }
 
-            VpnBus.update { it.copy(state = VpnState.CONNECTED, message = "") }
+            if (stopping) throw CancellationException("connection stopped")
+            VpnBus.update { if (stopping || it.state != VpnState.CONNECTING) it
+                else it.copy(state = VpnState.CONNECTED, message = "") }
+            if (stopping || VpnBus.status.value.state != VpnState.CONNECTED)
+                throw CancellationException("connection stopped")
             AppLog.d("اتصال برقرار شد به $name (تست: ${PingTargets.label(usedUrl)})")
-            startStatsLoop()
+            if (!stopping) startStatsLoop()
+        } catch (_: CancellationException) {
+            // لغوِ کاربر خطای اتصال نیست؛ stopVpn پس از اتمام job تونل را جمع می‌کند.
+            AppLog.d("connection attempt cancelled")
         } catch (t: Throwable) {
-            val detail = t.message ?: t.javaClass.simpleName
-            AppLog.e("اتصال ناموفق: $detail", t)
-            VpnBus.update { it.copy(state = VpnState.DISCONNECTED, message = detail) }
-            XrayCore.stop()
-            closeTun()
-            stopSelf()
+            if (!stopping) {
+                val detail = t.message ?: t.javaClass.simpleName
+                AppLog.e("اتصال ناموفق: $detail", t)
+                VpnBus.update { it.copy(state = VpnState.DISCONNECTED, message = detail) }
+                XrayCore.stop()
+                closeTun()
+                stopSelf()
+            }
         }
     }
 
@@ -177,7 +200,8 @@ class NzVpnService : VpnService() {
      * پاسخ سالم کافی است؛ کل مرحله حداکثر ۱۳ ثانیه (در حالت شبکهٔ خراب) است.
      * در حالت عادی مقصدی که زودتر جواب دهد ظرف چند ثانیه اتصال را تأیید می‌کند.
      */
-    private fun verifyConnection(): Pair<Boolean, String> {
+    private suspend fun verifyConnection(): Pair<Boolean, String> {
+        val connectionContext = currentCoroutineContext()
         val initial = listOf(PingTargets.IRANIAN.first(), PingTargets.GLOBAL.first())
         val remaining = PingTargets.verifyAttempts().filterNot { it in initial }
         val completion = ExecutorCompletionService<Pair<Long, String>>(verifyPool)
@@ -196,6 +220,7 @@ class NzVpnService : VpnService() {
         var received = 0
         try {
             while (System.nanoTime() < deadline) {
+                connectionContext.ensureActive()
                 if (!expanded && (System.nanoTime() >= expandAt || received == futures.size)) {
                     submit(remaining)
                     expanded = true
@@ -203,9 +228,10 @@ class NzVpnService : VpnService() {
                 if (expanded && received == futures.size) break
                 val waitUntil = if (expanded) deadline else minOf(expandAt, deadline)
                 val pending = completion.poll(
-                    (waitUntil - System.nanoTime()).coerceAtLeast(0L),
+                    (waitUntil - System.nanoTime()).coerceIn(0L, TimeUnit.MILLISECONDS.toNanos(200)),
                     TimeUnit.NANOSECONDS,
                 ) ?: continue
+                connectionContext.ensureActive()
                 received++
                 val (latency, url) = runCatching { pending.get() }.getOrNull() ?: continue
                 if (latency > 0) {
@@ -236,12 +262,20 @@ class NzVpnService : VpnService() {
     }
 
     private fun stopVpn() {
-        VpnBus.update { it.copy(state = VpnState.STOPPING) }
+        if (stopping) return
+        stopping = true
+        VpnBus.update { it.copy(state = VpnState.STOPPING, message = "") }
+        val pending = connectJob
+        pending?.cancel()
         statsJob?.cancel()
+        // توقف هسته بلافاصله، حتی اگر هنوز در establish/startLoop/تأیید اتصال باشیم.
         XrayCore.stop()
-        // نکته مهم (از v2rayNG): stopSelf باید قبل از بستن اینترفیس باشد
-        stopSelf()
         scope.launch {
+            // تا خروج کار اتصال صبر کن تا شروع دیرهنگام هسته دوباره VPN را زنده نکند.
+            pending?.join()
+            XrayCore.stop()
+            // ترتیب v2rayNG: اول stopSelf، بعد بستن TUN.
+            stopSelf()
             delay(150)
             closeTun()
             VpnBus.reset()

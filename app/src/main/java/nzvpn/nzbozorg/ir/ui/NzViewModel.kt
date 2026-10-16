@@ -31,10 +31,14 @@ import nzvpn.nzbozorg.ir.data.SavedProfiles
 import nzvpn.nzbozorg.ir.data.RepoVisibility
 import nzvpn.nzbozorg.ir.data.RepoServerLabels
 import nzvpn.nzbozorg.ir.data.ServerStore
+import nzvpn.nzbozorg.ir.data.SubscriptionQuota
+import nzvpn.nzbozorg.ir.data.SubscriptionQuotaStore
 import nzvpn.nzbozorg.ir.model.Profile
 import nzvpn.nzbozorg.ir.model.Protocol
 import nzvpn.nzbozorg.ir.net.GithubRelease
 import nzvpn.nzbozorg.ir.net.GithubUpdateClient
+import nzvpn.nzbozorg.ir.net.InstalledReleaseNotes
+import nzvpn.nzbozorg.ir.net.InstalledReleaseNotesPolicy
 import nzvpn.nzbozorg.ir.net.UpdateAlerts
 import nzvpn.nzbozorg.ir.net.ReleaseCatalog
 import nzvpn.nzbozorg.ir.net.RepoClient
@@ -87,6 +91,8 @@ data class NzUiState(
     val groups: List<ServerGroup> = emptyList(),
     /** ساب‌ها برای حذف از تنظیمات؛ گروه‌های مخزن هم اینجا دیده می‌شوند. */
     val subscriptions: List<GroupSource> = emptyList(),
+    /** فقط ساب‌های دستی با هدر معتبر؛ هرگز از ساب‌های پیش‌فرض مخزن پر نمی‌شود. */
+    val subscriptionQuotas: Map<String, SubscriptionQuota> = emptyMap(),
     val selectedId: String = "",
     val busy: Boolean = false,
     val busyText: String = "",
@@ -127,6 +133,9 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     private val _update = MutableStateFlow(UpdateUiState())
     val update: StateFlow<UpdateUiState> = _update.asStateFlow()
     private var updateJob: Job? = null
+    private val _installedNotes = MutableStateFlow<InstalledReleaseNotes?>(null)
+    val installedNotes: StateFlow<InstalledReleaseNotes?> = _installedNotes.asStateFlow()
+    private var notesJob: Job? = null
 
     private val _ui = MutableStateFlow(NzUiState())
     val ui: StateFlow<NzUiState> = _ui.asStateFlow()
@@ -141,6 +150,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
 
     /** منابع و سرورها با هم در یک snapshot ذخیره می‌شوند؛ ذخیره‌ها آخرین وضعیت را می‌خوانند. */
     @Volatile private var sourcesByGroup: Map<String, GroupSource> = emptyMap()
+    private var quotasByGroup: Map<String, SubscriptionQuota> = emptyMap()
     private val saveMutex = Mutex()
 
     /** تست اتصال و تست دستی هر کدام جداگانه قابل لغو هستند. */
@@ -175,6 +185,11 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
         val stored = withContext(Dispatchers.IO) { ServerStore.loadData(getApplication()) }
         val servers = stored.profiles
         sourcesByGroup = stored.sources.associateBy { it.group }
+        quotasByGroup = sourcesByGroup.values.filter { it.kind == GroupSource.Kind.SUBSCRIPTION }
+            .mapNotNull { source ->
+                SubscriptionQuotaStore.load(getApplication(), source.location)
+                    ?.let { source.group to it }
+            }.toMap()
         val selected = prefs.lastSelectedId.takeIf { id -> servers.any { it.id == id } }
             ?: servers.firstOrNull()?.id.orEmpty()
         _ui.value = _ui.value.copy(selectedId = selected)
@@ -196,6 +211,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                 "بارگذاری ساب‌ها طول کشید؛ می‌تونی از + اضافه کنی یا کمی صبر کنی" else _ui.value.message,
         )
         checkForUpdates()
+        checkInstalledReleaseNotes()
         AppLog.d("راه‌اندازی کامل شد — $count سرور، رفرش پس‌زمینه: ${!refresh.isCompleted}")
     }
 
@@ -219,6 +235,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
         if (_ui.value.bootStage != BootStage.READY) return
         if (foregroundRefreshJob?.isActive != true) refreshAllOnLaunch()
         checkForUpdates()
+        checkInstalledReleaseNotes()
     }
 
     private fun buildGroups(
@@ -257,7 +274,23 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
             subscriptions = sourcesByGroup.values.filter { source ->
                 source.kind != GroupSource.Kind.FILE && ordered.contains(source.group)
             }.sortedBy { ordered.indexOf(it.group) },
+            subscriptionQuotas = quotasByGroup,
         )
+    }
+
+    /** موفقیت بدون هدر آمار را حذف می‌کند؛ خطای شبکه مقدار قبلی را نگه می‌دارد. */
+    private fun recordQuota(source: GroupSource, quota: SubscriptionQuota?) {
+        if (source.kind != GroupSource.Kind.SUBSCRIPTION || sourcesByGroup[source.group] != source) return
+        SubscriptionQuotaStore.save(getApplication(), source.location, quota)
+        quotasByGroup = if (quota == null) quotasByGroup - source.group
+            else quotasByGroup + (source.group to quota)
+        _ui.value = _ui.value.copy(subscriptionQuotas = quotasByGroup)
+    }
+
+    private fun removeQuota(source: GroupSource?) {
+        if (source?.kind != GroupSource.Kind.SUBSCRIPTION) return
+        SubscriptionQuotaStore.save(getApplication(), source.location, null)
+        quotasByGroup = quotasByGroup - source.group
     }
 
     private fun persist() {
@@ -335,6 +368,42 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ------------------------------------------- انتشار امضاشدهٔ گیت‌هاب
+
+    /** بعد از ارتقای واقعی، یادداشت همان نسخه را بخوان؛ 404/آفلاین = تلاش دوباره در ورود بعدی. */
+    fun checkInstalledReleaseNotes() {
+        if (BuildConfig.DEBUG || notesJob?.isActive == true || _installedNotes.value != null) return
+        val app = getApplication<Application>()
+        val packageInfo = runCatching {
+            app.packageManager.getPackageInfo(app.packageName, 0)
+        }.getOrNull() ?: return
+        val version = BuildConfig.VERSION_NAME
+        val now = System.currentTimeMillis()
+        if (!InstalledReleaseNotesPolicy.shouldRequest(
+                version, packageInfo.firstInstallTime, packageInfo.lastUpdateTime,
+                prefs.shownReleaseNotesVersion, prefs.releaseNotesAttemptVersion,
+                prefs.releaseNotesAttemptAt, now,
+            )) return
+        prefs.releaseNotesAttemptVersion = version
+        prefs.releaseNotesAttemptAt = now
+        notesJob = viewModelScope.launch {
+            try {
+                val notes = githubUpdates.installedReleaseNotes(version) ?: return@launch
+                // اگر انتشار فعلاً توضیحی ندارد، بعداً دوباره تلاش کن؛ یادداشت را نخوانده حساب نکن.
+                if (notes.body.isNotBlank()) _installedNotes.value = notes
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                AppLog.e("یادداشت انتشار این نسخه هنوز در دسترس نیست", t)
+            }
+        }
+    }
+
+    fun dismissInstalledReleaseNotes() {
+        val notes = _installedNotes.value ?: return
+        prefs.shownReleaseNotesVersion = notes.version
+        _installedNotes.value = null
+    }
+
     fun checkForUpdates() {
         if (updateJob?.isActive == true) return
         val previous = _update.value
@@ -584,12 +653,15 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                 val fetched = withContext(Dispatchers.IO) {
                     runCatching {
                         when (source.kind) {
-                            GroupSource.Kind.REPO, GroupSource.Kind.SUBSCRIPTION ->
-                                repo.fetchSubscription(source.location, originalGroup).profiles
+                            GroupSource.Kind.SUBSCRIPTION -> repo.fetchSubscriptionWithQuota(
+                                source.location, originalGroup,
+                            ).let { it.parsed.profiles to it.quota }
+                            GroupSource.Kind.REPO ->
+                                repo.fetchSubscription(source.location, originalGroup).profiles to null
                             GroupSource.Kind.FILE -> {
                                 val uri = Uri.parse(source.location)
                                 val content = readFileText(uri)
-                                when (val parsed = ConfigImporter.classify(content, originalGroup)) {
+                                val profiles = when (val parsed = ConfigImporter.classify(content, originalGroup)) {
                                     is ConfigImporter.Result.Servers -> parsed.profiles
                                     is ConfigImporter.Result.SubscriptionText -> parsed.profiles
                                     is ConfigImporter.Result.Subscription ->
@@ -599,11 +671,15 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                                     is ConfigImporter.Result.Failure ->
                                         throw IllegalArgumentException(parsed.message)
                                 }
+                                profiles to null
                             }
                         }
                     }
                 }
-                fetched.onSuccess { profiles ->
+                fetched.onSuccess { (profiles, quota) ->
+                    // اگر کاربر پوشه را حین دانلود حذف کرد، نباید دوباره زنده‌اش کنیم.
+                    if (sourcesByGroup[name] != source) return@onSuccess
+                    recordQuota(source, quota)
                     if (profiles.isEmpty()) {
                         if (!silent) _ui.value = _ui.value.copy(message = "«$name» خالی بود؛ سرورهای قبلی حفظ شدند")
                     } else {
@@ -911,13 +987,14 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun downloadSubscription(url: String, name: String, replace: Boolean) {
         _ui.value = _ui.value.copy(busyText = "دانلود ساب «$name»…")
         val fetched = withContext(Dispatchers.IO) {
-            runCatching { repo.fetchSubscription(url, name) }
+            runCatching { repo.fetchSubscriptionWithQuota(url, name) }
         }
         fetched.onFailure { t ->
             _ui.value = _ui.value.copy(
                 busy = false, busyText = "", message = t.message ?: "ساب خوانده نشد",
             )
-        }.onSuccess { parsed ->
+        }.onSuccess { result ->
+            val parsed = result.parsed
             if (parsed.profiles.isEmpty()) {
                 _ui.value = _ui.value.copy(
                     busy = false, busyText = "", message = "ساب خالی بود؛ سرورهای قبلی حفظ شدند",
@@ -929,6 +1006,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                     "پوشهٔ «$name» با ${fa(parsed.profiles.size)} سرور اضافه شد",
                     source, replace,
                 )
+                recordQuota(source, result.quota)
             }
         }
     }
@@ -948,15 +1026,17 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                 progress = index.toFloat() / links.size,
             )
             val fetched = withContext(Dispatchers.IO) {
-                runCatching { repo.fetchSubscription(link.url, name) }
+                runCatching { repo.fetchSubscriptionWithQuota(link.url, name) }
             }
-            val profiles = fetched.getOrNull()?.profiles.orEmpty()
+            val result = fetched.getOrNull()
+            val profiles = result?.parsed?.profiles.orEmpty()
             if (profiles.isNotEmpty()) {
+                val source = GroupSource(GroupNaming.key(name), GroupSource.Kind.SUBSCRIPTION, link.url)
                 addProfiles(
-                    profiles.map { it.copy(group = name) }, "",
-                    GroupSource(GroupNaming.key(name), GroupSource.Kind.SUBSCRIPTION, link.url),
+                    profiles.map { it.copy(group = name) }, "", source,
                     replace = old != null || legacy != null, showMessage = false,
                 )
+                recordQuota(source, result?.quota)
                 succeeded++
             } else {
                 failed++
@@ -1019,6 +1099,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
                 suppressedRepo.add(source.location)
                 prefs.saveSuppressedRepoLocations(suppressedRepo)
             }
+            removeQuota(source)
             sourcesByGroup = sourcesByGroup - profile.groupName
         }
         refreshGroups(servers)
@@ -1045,6 +1126,7 @@ class NzViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun deleteGroup(name: String) {
         val servers = _ui.value.servers.filterNot { it.groupName == name }
+        removeQuota(sourcesByGroup[name])
         sourcesByGroup = sourcesByGroup - name
         expanded.remove(name)
         groupOrder = groupOrder.filterNot { it == name }
